@@ -4,113 +4,122 @@ const qrcode = require('qrcode-terminal');
 const express = require('express');
 const pino = require('pino');
 const path = require('path');
+const fs = require('fs'); // Añadido para gestionar archivos de sesión
 
 const app = express();
-
-// --- CONFIGURACIÓN DE EXPRESS ---
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public'))); // Esto activa tu página web
+app.use(express.static(path.join(__dirname, 'public')));
 
-// CONFIGURACIÓN DE TU API (Token de seguridad)
-const MI_API_TOKEN = "ABC123XYZ";
+const API_TOKEN = "ABC123XYZ";
 let sock = null;
-let qrActual = null;
+let qrCode = null;
 
-// --- MOTOR DE WHATSAPP ---
-async function iniciarInstancia() {
+async function startWA() {
+    console.log("🔄 Iniciando motor de WhatsApp...");
     const { version } = await fetchLatestBaileysVersion();
+
+    // Usamos 'sesion_activa' como carpeta de archivos
     const { state, saveCreds } = await useMultiFileAuthState('sesion_activa');
 
     sock = makeWASocket({
         version,
         auth: state,
         logger: pino({ level: 'silent' }),
-        browser: ['AdminSystem', 'Chrome', '1.0.0'],
-        printQRInTerminal: false
+        browser: ['AdminSystem', 'Safari', '15.0'], // Identidad estable
+        printQRInTerminal: false,
     });
 
+    // Guardar credenciales al actualizarse
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-            qrActual = qr;
+            qrCode = qr;
             console.clear();
-            console.log("==========================================");
-            console.log("🔑 API TOKEN: " + MI_API_TOKEN);
-            console.log("📢 ESCANEA EL QR EN: http://localhost:3000");
-            console.log("==========================================");
+            console.log("📢 NUEVO QR GENERADO - ESCANEA EN EL PANEL WEB");
             qrcode.generate(qr, { small: true });
         }
 
         if (connection === 'close') {
-            qrActual = null;
+            qrCode = null;
             const code = lastDisconnect?.error?.output?.statusCode;
+            console.log(`❌ Conexión cerrada. Código: ${code}`);
+
+            // Si no fue un cierre de sesión manual, reconectar
             if (code !== DisconnectReason.loggedOut) {
-                console.log("⏳ Reintentando conexión...");
-                setTimeout(iniciarInstancia, 5000);
+                console.log("⏳ Reintentando conexión en 5 segundos...");
+                setTimeout(startWA, 5000);
             }
         } else if (connection === 'open') {
-            qrActual = null;
-            console.clear();
+            qrCode = null;
             console.log("✅ WHATSAPP CONECTADO Y API LISTA");
         }
     });
 
-    // Guardar el socket globalmente
+    // Hacer el socket accesible globalmente
     app.locals.sock = sock;
 }
 
-// --- RUTAS DE LA API ---
+// --- ENDPOINTS DE ADMINISTRACIÓN ---
 
-// 1. Página Principal (Frontend)
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-// 2. Estado de la Instancia (Para el frontend y tu sistema)
+// 1. Estado de la Instancia
 app.get('/status', (req, res) => {
+    const s = app.locals.sock;
     res.json({
-        instancia: sock?.user ? "CONECTADA" : "DESCONECTADA",
-        qr: qrActual,
-        numero: sock?.user?.id || null
+        instancia: s?.user ? "CONECTADA" : "DESCONECTADA",
+        numero: s?.user?.id ? s.user.id.split(':')[0] : null,
+        qr: qrCode
     });
 });
 
-// 3. Enviar Mensaje (Ruta que llamará tu Sistema Administrativo)
-// Ejemplo de uso: POST a http://localhost:3000/send
+// 2. Cerrar Sesión y Cambiar Número (Logout)
+app.get('/logout', async (req, res) => {
+    try {
+        const s = app.locals.sock;
+        if (s) {
+            await s.logout(); // Desconecta de WhatsApp
+            s.end(); // Cierra el socket
+        }
+
+        // Borrar carpeta de sesión para permitir nuevo QR
+        const sessionPath = path.join(__dirname, 'sesion_activa');
+        if (fs.existsSync(sessionPath)) {
+            fs.rmSync(sessionPath, { recursive: true, force: true });
+            console.log("🗑️ Sesión eliminada físicamente.");
+        }
+
+        res.json({ status: "success", message: "Sesión cerrada. El servidor se reiniciará." });
+
+        // Reiniciar el proceso para limpiar memoria y generar nuevo QR
+        setTimeout(() => { process.exit(0); }, 1500);
+
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 3. Enviar Mensaje vía API
 app.post('/send', (req, res) => {
     const { token, to, message } = req.body;
+    const s = app.locals.sock;
 
-    // Validación de Token (Seguridad)
-    if (token !== MI_API_TOKEN) {
-        return res.status(401).json({ error: "Token de API inválido" });
-    }
+    if (token !== API_TOKEN) return res.status(401).json({ error: "Unauthorized" });
+    if (!s?.user) return res.status(503).json({ error: "WA Not Connected" });
 
-    if (!app.locals.sock?.user) {
-        return res.status(503).json({ error: "WhatsApp no está vinculado actualmente" });
-    }
+    // Limpiar el número y formatear JID
+    const cleanNumber = to.replace(/\D/g, '');
+    const jid = `${cleanNumber}@s.whatsapp.net`;
 
-    // Formatear el número de destino
-    const jid = `${to.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
-
-    app.locals.sock.sendMessage(jid, { text: message })
-        .then(m => {
-            res.json({
-                status: "success",
-                messageId: m.key.id,
-                to: jid
-            });
-        })
-        .catch(e => {
-            res.status(500).json({ error: "Error al enviar: " + e.message });
-        });
+    s.sendMessage(jid, { text: message })
+        .then(m => res.json({ status: "success", messageId: m.key.id }))
+        .catch(e => res.status(500).json({ error: e.message }));
 });
 
 // --- INICIO DEL SERVIDOR ---
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 app.listen(PORT, () => {
-    console.log(`🌐 Servidor API corriendo en http://localhost:${PORT}`);
-    iniciarInstancia();
+    console.log(`🌐 API Dashboard en http://localhost:${PORT}`);
+    startWA();
 });
