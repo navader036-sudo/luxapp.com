@@ -7,6 +7,8 @@
     <title>Gateway Config | Admin System</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <!-- Librería para generar el QR en el navegador -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
         body {
             background: radial-gradient(circle at top right, #1e1b4b, #020617);
@@ -15,6 +17,12 @@
         .card-blur {
             background: rgba(15, 23, 42, 0.6);
             backdrop-filter: blur(12px);
+        }
+
+        #qrcode img {
+            margin: 0 auto;
+            border: 8px solid white;
+            border-radius: 10px;
         }
     </style>
 </head>
@@ -26,7 +34,8 @@
             <div>
                 <h1 class="text-3xl font-black text-white tracking-tighter">GATEWAY<span
                         class="text-indigo-500">SET</span></h1>
-                <p class="text-indigo-400/50 text-xs uppercase tracking-widest font-bold">Configuración de Canales</p>
+                <p class="text-indigo-400/50 text-xs uppercase tracking-widest font-bold">Panel de Control de Instancia
+                </p>
             </div>
             <div id="status-display"
                 class="flex items-center gap-3 px-5 py-2 rounded-2xl border border-slate-700 card-blur">
@@ -37,73 +46,51 @@
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
 
-            <!-- CONFIGURACIÓN DEL EMISOR (EL QUE ENVÍA) -->
+            <!-- COLUMNA IZQUIERDA: ESTADO Y VINCULACIÓN -->
             <div class="lg:col-span-1 space-y-6">
+                <!-- Tarjeta de QR (Solo se muestra si no hay conexión) -->
+                <div id="qr-container"
+                    class="card-blur p-6 rounded-[2rem] border border-indigo-500/30 shadow-2xl hidden">
+                    <h3 class="text-white font-bold mb-4 text-center text-sm uppercase">Escanear para Vincular</h3>
+                    <div id="qrcode" class="flex justify-center mb-4"></div>
+                    <p class="text-[10px] text-center text-indigo-300 animate-pulse">Abre WhatsApp > Dispositivos
+                        vinculados > Vincular un dispositivo</p>
+                </div>
+
                 <div class="card-blur p-6 rounded-[2rem] border border-indigo-500/10 shadow-2xl">
                     <h3 class="text-white font-bold mb-6 flex items-center gap-2 text-sm uppercase">
                         <i class="fas fa-arrow-up text-indigo-500"></i> Canal de Salida
                     </h3>
 
                     <div class="bg-slate-950/50 p-4 rounded-2xl border border-slate-800 mb-4">
-                        <label class="text-[10px] text-slate-500 font-bold uppercase">Número Vinculado</label>
+                        <label class="text-[10px] text-slate-500 font-bold uppercase">Número Activo</label>
                         <p id="sender-num" class="text-xl font-mono text-indigo-300">Cargando...</p>
                     </div>
 
-                    <p class="text-[10px] text-slate-500 mb-6 px-1">Este es el número que tu sistema administrativo
-                        usará para enviar todas las notificaciones.</p>
-
                     <button onclick="logout()"
-                        class="w-full bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white border border-red-500/20 py-3 rounded-xl font-bold text-xs transition-all uppercase tracking-tighter">
-                        Desvincular y Cambiar Número
+                        class="w-full bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white border border-red-500/20 py-3 rounded-xl font-bold text-xs transition-all uppercase">
+                        Cerrar Sesión
                     </button>
-                </div>
-
-                <div class="card-blur p-6 rounded-[2rem] border border-indigo-500/10 shadow-2xl">
-                    <h3 class="text-white font-bold mb-6 flex items-center gap-2 text-sm uppercase">
-                        <i class="fas fa-shield-alt text-indigo-500"></i> Seguridad API
-                    </h3>
-                    <div class="bg-slate-950/50 p-4 rounded-2xl border border-slate-800">
-                        <label class="text-[10px] text-slate-500 font-bold uppercase block mb-1">API Key Actual</label>
-                        <code class="text-amber-400 font-bold tracking-widest text-sm">ABC123XYZ</code>
-                    </div>
                 </div>
             </div>
 
-            <!-- CONFIGURACIÓN DEL RECEPTOR (EL QUE RECIBE PRUEBAS) -->
+            <!-- COLUMNA DERECHA: CONSOLA API -->
             <div class="lg:col-span-2 space-y-6">
                 <div class="card-blur p-8 rounded-[2rem] border border-indigo-500/10 shadow-2xl">
                     <h3 class="text-white font-bold mb-8 flex items-center gap-2 text-sm uppercase">
-                        <i class="fas fa-flask text-indigo-500"></i> Laboratorio de Pruebas (Entrada)
+                        <i class="fas fa-terminal text-indigo-500"></i> Consola de Prueba
                     </h3>
 
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-                        <div>
-                            <label class="text-[10px] font-bold text-slate-500 uppercase mb-2 block ml-1">Configurar
-                                Número Destino</label>
-                            <input type="text" id="target-phone" placeholder="Ej: 584120000000"
-                                class="w-full bg-slate-950 border border-slate-800 p-4 rounded-2xl focus:border-indigo-500 outline-none transition text-white font-mono">
-                            <p class="text-[9px] text-slate-600 mt-2 px-1 italic">Define a qué número llegarán los
-                                mensajes de prueba de tu administración.</p>
-                        </div>
-                        <div class="bg-indigo-600/5 border border-indigo-500/10 p-5 rounded-2xl">
-                            <h4 class="text-indigo-300 text-xs font-bold mb-2 uppercase">Nota del Sistema</h4>
-                            <p class="text-[11px] text-indigo-200/50 leading-relaxed">
-                                Una vez configurado el destino, puedes enviar alertas desde tu ERP usando este endpoint
-                                directamente.
-                            </p>
-                        </div>
-                    </div>
-
                     <div class="space-y-4">
-                        <label class="text-[10px] font-bold text-slate-500 uppercase mb-2 block ml-1">Mensaje de
-                            Prueba</label>
-                        <textarea id="test-msg"
-                            placeholder="Hola, esta es una prueba de conexión desde el sistema administrativo..."
+                        <input type="text" id="target-phone" placeholder="Número Destino (ej: 584120000000)"
+                            class="w-full bg-slate-950 border border-slate-800 p-4 rounded-2xl focus:border-indigo-500 outline-none transition text-white font-mono">
+
+                        <textarea id="test-msg" placeholder="Mensaje de prueba..."
                             class="w-full bg-slate-950 border border-slate-800 p-4 rounded-2xl h-24 focus:border-indigo-500 outline-none transition text-white resize-none text-sm"></textarea>
 
                         <button onclick="sendTest()"
-                            class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-4 rounded-2xl transition duration-300 shadow-[0_10px_20px_rgba(79,70,229,0.3)] uppercase text-xs tracking-widest">
-                            Probar Canal de Comunicación
+                            class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-4 rounded-2xl transition duration-300 shadow-lg uppercase text-xs tracking-widest">
+                            Enviar vía API
                         </button>
                     </div>
 
@@ -116,24 +103,46 @@
     </div>
 
     <script>
+        let qrcodeGen = new QRCode(document.getElementById("qrcode"), {
+            width: 200,
+            height: 200
+        });
+
+        let lastQR = null;
+
         async function updateStatus() {
             try {
                 const res = await fetch('/status');
                 const data = await res.json();
+
                 const dot = document.getElementById('status-dot');
                 const text = document.getElementById('status-text');
                 const sender = document.getElementById('sender-num');
+                const qrCont = document.getElementById('qr-container');
 
                 if (data.instancia === "CONECTADA") {
+                    qrCont.classList.add('hidden');
                     dot.className = "w-3 h-3 rounded-full bg-emerald-500 shadow-[0_0_10px_#10b981]";
                     text.innerText = "Operativo";
                     text.className = "text-xs font-black text-emerald-400 italic";
-                    sender.innerText = "+" + data.numero.split(':')[0];
+                    sender.innerText = "+" + data.numero;
                 } else {
                     dot.className = "w-3 h-3 rounded-full bg-red-500 shadow-[0_0_10px_#ef4444]";
-                    text.innerText = "Offline";
+                    text.innerText = "Desconectado";
                     text.className = "text-xs font-black text-red-400 italic";
                     sender.innerText = "No Vinculado";
+
+                    // Mostrar QR si está disponible
+                    if (data.qr) {
+                        qrCont.classList.remove('hidden');
+                        if (lastQR !== data.qr) {
+                            qrcodeGen.clear();
+                            qrcodeGen.makeCode(data.qr);
+                            lastQR = data.qr;
+                        }
+                    } else {
+                        qrCont.classList.add('hidden');
+                    }
                 }
             } catch (e) { }
         }
@@ -143,33 +152,26 @@
             const msg = document.getElementById('test-msg').value;
             const log = document.getElementById('log-box');
 
-            if (!to || !msg) return alert("Configura el número y el mensaje primero.");
-
             log.classList.remove('hidden');
-            log.innerText = "> [HTTP POST] Iniciando handshake con la API...";
+            log.innerText = "> Enviando...";
 
-            try {
-                const res = await fetch('/send', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ token: "ABC123XYZ", to: to, message: msg })
-                });
-                const data = await res.json();
-                log.innerText += "\n> [RESPONSE] " + JSON.stringify(data);
-            } catch (e) {
-                log.innerText += "\n> [ERROR] Fallo de comunicación.";
-            }
+            const res = await fetch('/send', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: "ABC123XYZ", to: to, message: msg })
+            });
+            const data = await res.json();
+            log.innerText = "> API Response: " + JSON.stringify(data);
         }
 
         async function logout() {
-            if (confirm("¿Estás seguro? Se cerrará la sesión actual y tendrás que escanear un nuevo QR para configurar otro número emisor.")) {
-                const res = await fetch('/logout');
-                alert("Sesión cerrada. Reiniciando servidor para nuevo QR...");
+            if (confirm("¿Cerrar sesión?")) {
+                await fetch('/logout');
                 location.reload();
             }
         }
 
-        setInterval(updateStatus, 5000);
+        setInterval(updateStatus, 3000);
         updateStatus();
     </script>
 </body>
