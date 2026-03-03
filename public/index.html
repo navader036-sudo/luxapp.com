@@ -4,9 +4,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Luxapp | API Gateway Professional</title>
+    <title>Luxapp | Helpdesk & AI Center</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
@@ -15,6 +16,7 @@
             font-family: 'Plus Jakarta Sans', sans-serif;
             background-color: #020617;
             color: #cbd5e1;
+            overflow: hidden;
         }
 
         .glass-card {
@@ -44,17 +46,29 @@
             background: #1e293b;
             border-radius: 10px;
         }
+
+        .chat-bubble-me {
+            background: #4f46e5;
+            color: white;
+            border-radius: 18px 18px 4px 18px;
+        }
+
+        .chat-bubble-them {
+            background: #1e293b;
+            color: #cbd5e1;
+            border-radius: 18px 18px 18px 4px;
+        }
     </style>
 </head>
 
-<body class="min-h-screen flex">
+<body class="h-screen flex">
 
     <!-- SIDEBAR -->
-    <aside class="w-64 border-r border-slate-800 flex flex-col hidden md:flex">
+    <aside class="w-64 border-r border-slate-800 flex flex-col">
         <div class="p-8">
             <h1 class="text-2xl font-extrabold text-white tracking-tighter italic">LUX<span
                     class="text-indigo-500">APP</span></h1>
-            <p class="text-[9px] text-slate-500 font-bold uppercase tracking-widest mt-1">Enterprise Engine</p>
+            <p class="text-[9px] text-slate-500 font-bold uppercase tracking-widest mt-1">Enterprise Solution</p>
         </div>
 
         <nav class="flex-1 px-4 space-y-2">
@@ -62,225 +76,263 @@
                 class="sidebar-item active w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all">
                 <i class="fas fa-chart-pie w-5"></i> Dashboard
             </button>
-            <button onclick="switchTab('messages')" id="btn-messages"
+            <button onclick="switchTab('helpdesk')" id="btn-helpdesk"
                 class="sidebar-item w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all hover:bg-slate-800/50">
-                <i class="fas fa-message w-5"></i> Historial Live
+                <i class="fas fa-headset w-5"></i> Helpdesk Live
             </button>
-            <button onclick="switchTab('api')" id="btn-api"
+            <button onclick="switchTab('ai')" id="btn-ai"
                 class="sidebar-item w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all hover:bg-slate-800/50">
-                <i class="fas fa-code w-5"></i> Integración API
+                <i class="fas fa-robot w-5"></i> Entrenamiento IA
             </button>
         </nav>
 
         <div class="p-6 border-t border-slate-800">
-            <div id="connection-badge"
-                class="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-900 border border-slate-800">
+            <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-900 border border-slate-800">
                 <div id="status-dot" class="w-2 h-2 rounded-full bg-red-500"></div>
                 <span id="status-text" class="text-[10px] font-bold uppercase tracking-tighter">Desconectado</span>
             </div>
+            <p id="display-num" class="text-[10px] text-slate-500 mt-2 text-center font-mono">---</p>
         </div>
     </aside>
 
-    <!-- MAIN CONTENT -->
+    <!-- CONTENT -->
     <main class="flex-1 flex flex-col h-screen overflow-hidden">
-
-        <!-- TOP BAR -->
-        <header class="h-16 border-b border-slate-800 flex items-center justify-between px-8 bg-slate-950/50">
+        <header class="h-16 border-b border-slate-800 flex items-center px-8 bg-slate-950/50">
             <h2 id="tab-title" class="text-sm font-bold uppercase tracking-widest text-slate-400">Dashboard</h2>
-            <div class="flex items-center gap-4">
-                <span id="display-num" class="text-xs font-mono text-indigo-400">---</span>
-                <button onclick="logout()"
-                    class="text-xs bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white px-3 py-1.5 rounded-lg transition-all font-bold">SALIR</button>
-            </div>
         </header>
 
-        <!-- CONTENT AREA -->
-        <div class="flex-1 overflow-y-auto p-8 custom-scrollbar">
-
-            <!-- TAB: DASHBOARD -->
-            <div id="tab-dash" class="space-y-6">
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div id="qr-section" class="md:col-span-1 glass-card p-6 rounded-[2rem] text-center hidden">
-                        <h3 class="text-white font-bold text-sm mb-4 uppercase">Vincular Instancia</h3>
-                        <div id="qrcode" class="mb-4"></div>
-                        <p class="text-[10px] text-slate-500">Abre WhatsApp en tu teléfono y escanea el código para
-                            activar la API.</p>
-                    </div>
-
-                    <div class="md:col-span-2 glass-card p-8 rounded-[2rem] flex flex-col justify-center">
-                        <h3 class="text-indigo-400 font-bold text-xs mb-2 uppercase tracking-widest">Consola de Prueba
-                        </h3>
-                        <h4 class="text-2xl font-bold text-white mb-6">Enviar Mensaje Directo</h4>
-
-                        <div class="space-y-4">
-                            <input type="text" id="test-phone" placeholder="Número Destino (ej: 58412000000)"
-                                class="w-full bg-slate-900 border border-slate-700 p-4 rounded-2xl outline-none focus:border-indigo-500 transition text-white">
-                            <textarea id="test-msg" placeholder="Escribe un mensaje de prueba..."
-                                class="w-full bg-slate-900 border border-slate-700 p-4 rounded-2xl h-32 outline-none focus:border-indigo-500 transition text-white resize-none"></textarea>
-                            <button onclick="sendManual()"
-                                class="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-4 px-8 rounded-2xl transition shadow-lg shadow-indigo-500/20 uppercase text-xs tracking-widest">
-                                Ejecutar Envío API
-                            </button>
-                        </div>
-                    </div>
+        <div id="tab-dash" class="flex-1 overflow-y-auto p-8 space-y-6">
+            <div id="qr-section" class="max-w-xs glass-card p-6 rounded-[2rem] text-center hidden">
+                <h3 class="text-white font-bold text-sm mb-4 uppercase">Vincular WhatsApp</h3>
+                <div id="qrcode" class="mb-4"></div>
+                <p class="text-[10px] text-slate-500">Escanea para activar el Helpdesk.</p>
+            </div>
+            <div id="connected-info" class="hidden">
+                <div class="glass-card p-8 rounded-[2rem] border-l-4 border-l-emerald-500">
+                    <h3 class="text-emerald-400 font-bold">Sistema Activo</h3>
+                    <p class="text-sm text-slate-400 mt-2">La instancia está funcionando correctamente. Puedes usar el
+                        Helpdesk o la API.</p>
                 </div>
             </div>
+        </div>
 
-            <!-- TAB: MESSAGES (HISTORY) -->
-            <div id="tab-messages" class="hidden h-full flex flex-col">
-                <div class="glass-card rounded-[2rem] flex-1 flex flex-col overflow-hidden">
-                    <div id="msg-container" class="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar">
-                        <!-- Mensajes cargados vía JS -->
-                    </div>
+        <div id="tab-helpdesk" class="hidden flex-1 flex overflow-hidden">
+            <!-- Contact List -->
+            <div class="w-80 border-r border-slate-800 flex flex-col bg-slate-950/20">
+                <div class="p-4 border-b border-slate-800">
+                    <input type="text" placeholder="Buscar chat..."
+                        class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white">
+                </div>
+                <div id="contact-list" class="flex-1 overflow-y-auto custom-scrollbar">
+                    <!-- Chats will appear here -->
                 </div>
             </div>
-
-            <!-- TAB: API CONFIG -->
-            <div id="tab-api" class="hidden max-w-4xl space-y-6">
-                <div class="glass-card p-8 rounded-[2rem] border-l-4 border-l-indigo-500">
-                    <h3 class="text-white font-bold text-lg mb-6">Credenciales de Integración</h3>
-
-                    <div class="space-y-6">
-                        <div class="group">
-                            <label class="text-[10px] font-bold text-slate-500 uppercase mb-2 block">Endpoint de Envío
-                                (POST)</label>
-                            <div class="flex items-center gap-2">
-                                <code id="url-send"
-                                    class="flex-1 bg-black/40 p-4 rounded-xl text-indigo-300 text-sm border border-slate-800">http://localhost:3000/api/instance/send</code>
-                            </div>
-                        </div>
-
-                        <div class="group">
-                            <label class="text-[10px] font-bold text-slate-500 uppercase mb-2 block">Endpoint de
-                                Mensajes Recibidos (GET)</label>
-                            <div class="flex items-center gap-2">
-                                <code id="url-receive"
-                                    class="flex-1 bg-black/40 p-4 rounded-xl text-indigo-300 text-sm border border-slate-800">http://localhost:3000/api/instance/messages</code>
-                            </div>
-                        </div>
-
-                        <div class="group">
-                            <label class="text-[10px] font-bold text-slate-500 uppercase mb-2 block">X-API-TOKEN (Header
-                                Authorization)</label>
-                            <div class="flex items-center gap-2">
-                                <input type="text" readonly value="MI_TOKEN_SECRETO_123"
-                                    class="flex-1 bg-slate-900 p-4 rounded-xl text-emerald-400 font-mono text-sm border border-slate-800">
-                            </div>
-                        </div>
-                    </div>
+            <!-- Chat Window -->
+            <div class="flex-1 flex flex-col">
+                <div id="chat-header" class="h-14 border-b border-slate-800 flex items-center px-6 bg-slate-900/10">
+                    <span id="active-contact-name" class="text-sm font-bold text-white">Selecciona un chat</span>
                 </div>
-
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div class="glass-card p-6 rounded-[2rem]">
-                        <h4 class="text-white font-bold text-xs uppercase mb-4 text-indigo-400">Ejemplo CURL Envío</h4>
-                        <pre class="text-[10px] bg-black/20 p-4 rounded-xl text-slate-400 overflow-x-auto">
-curl -X POST http://localhost:3000/api/instance/send \
--H "Authorization: MI_TOKEN_SECRETO_123" \
--H "Content-Type: application/json" \
--d '{"to": "58412000000", "message": "Hola"}'</pre>
-                    </div>
-                    <div class="glass-card p-6 rounded-[2rem]">
-                        <h4 class="text-white font-bold text-xs uppercase mb-4 text-emerald-400">Formato Respuesta</h4>
-                        <pre class="text-[10px] bg-black/20 p-4 rounded-xl text-slate-400 overflow-x-auto">
-{
-  "status": "sent",
-  "to": "58412000000"
-}</pre>
-                    </div>
+                <div id="chat-messages"
+                    class="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar flex flex-col-reverse">
+                    <!-- Messages will appear here -->
+                </div>
+                <div class="p-4 bg-slate-900/50 flex gap-2">
+                    <input type="text" id="chat-input" placeholder="Escribe un mensaje..."
+                        class="flex-1 bg-slate-800 border-none rounded-xl px-4 py-2 text-sm text-white focus:ring-2 focus:ring-indigo-500 outline-none">
+                    <button onclick="sendMessage()"
+                        class="bg-indigo-600 hover:bg-indigo-500 text-white p-2 rounded-xl px-6 transition">
+                        <i class="fas fa-paper-plane"></i>
+                    </button>
                 </div>
             </div>
+        </div>
 
+        <div id="tab-ai" class="hidden flex-1 overflow-y-auto p-8 space-y-6">
+            <div class="max-w-2xl glass-card p-8 rounded-[2rem]">
+                <div class="flex items-center justify-between mb-8">
+                    <h3 class="text-xl font-bold text-white">Módulo de Asistente Virtual</h3>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="ai-toggle" onchange="updateAIConfig()" class="sr-only peer">
+                        <div
+                            class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600">
+                        </div>
+                    </label>
+                </div>
+
+                <div class="space-y-6">
+                    <div>
+                        <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">OpenAI
+                            API Key (Opcional para IA Avanzada)</label>
+                        <input type="password" id="ai-key" placeholder="sk-..." onchange="updateAIConfig()"
+                            class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-white outline-none focus:border-indigo-500 transition">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Prompt
+                            de Entrenamiento</label>
+                        <textarea id="ai-prompt" rows="6" onchange="updateAIConfig()"
+                            class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-white outline-none focus:border-indigo-500 transition resize-none"></textarea>
+                    </div>
+                    <button onclick="updateAIConfig(true)"
+                        class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl transition uppercase text-xs tracking-widest">
+                        Guardar Configuración
+                    </button>
+                </div>
+            </div>
         </div>
     </main>
 
     <script>
-        const API_TOKEN = "MI_TOKEN_SECRETO_123";
-        let qrcodeGen = new QRCode(document.getElementById("qrcode"), { width: 180, height: 180 });
-        let lastQR = null;
+        const socket = io();
+        let currentJid = null;
+        let chatData = {};
+        const qrcodeGen = new QRCode(document.getElementById("qrcode"), { width: 180, height: 180 });
 
         function switchTab(tab) {
             document.querySelectorAll('[id^="tab-"]').forEach(t => t.classList.add('hidden'));
             document.querySelectorAll('.sidebar-item').forEach(b => b.classList.remove('active'));
-
             document.getElementById('tab-' + tab).classList.remove('hidden');
             document.getElementById('btn-' + tab).classList.add('active');
-            document.getElementById('tab-title').innerText = tab;
+            document.getElementById('tab-title').innerText = tab.toUpperCase();
         }
 
-        async function refreshData() {
-            try {
-                // Status
-                const res = await fetch('/api/instance/status', { headers: { 'Authorization': API_TOKEN } });
-                const data = await res.json();
+        socket.on('status', (data) => {
+            const dot = document.getElementById('status-dot');
+            const text = document.getElementById('status-text');
+            const qrSec = document.getElementById('qr-section');
+            const infoSec = document.getElementById('connected-info');
+            const dispNum = document.getElementById('display-num');
 
-                const dot = document.getElementById('status-dot');
-                const text = document.getElementById('status-text');
-                const qrSec = document.getElementById('qr-section');
-                const dispNum = document.getElementById('display-num');
+            if (data.connected) {
+                dot.className = "w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_#10b981]";
+                text.innerText = "En Línea";
+                qrSec.classList.add('hidden');
+                infoSec.classList.remove('hidden');
+                dispNum.innerText = "+" + data.user;
+            } else {
+                dot.className = "w-2 h-2 rounded-full bg-red-500";
+                text.innerText = "Desconectado";
+                infoSec.classList.add('hidden');
+                dispNum.innerText = "Offline";
+            }
+        });
 
-                if (data.connected) {
-                    dot.className = "w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_10px_#10b981]";
-                    text.innerText = "En Línea";
-                    qrSec.classList.add('hidden');
-                    dispNum.innerText = "+" + data.number;
-                } else {
-                    dot.className = "w-2 h-2 rounded-full bg-red-500";
-                    text.innerText = "Desconectado";
-                    dispNum.innerText = "Offline";
-                    if (data.qrCode) {
-                        qrSec.classList.remove('hidden');
-                        if (lastQR !== data.qrCode) {
-                            qrcodeGen.clear();
-                            qrcodeGen.makeCode(data.qrCode);
-                            lastQR = data.qrCode;
-                        }
-                    }
-                }
+        socket.on('qr', (qr) => {
+            document.getElementById('qr-section').classList.remove('hidden');
+            qrcodeGen.clear();
+            qrcodeGen.makeCode(qr);
+        });
 
-                // Messages (Solo visual en este panel, no limpia el buffer del backend)
-                // Nota: En una integración real, tu sistema administrativo es quien limpia el buffer.
-                // Aquí podrías crear un endpoint paralelo si quisieras ver el historial sin borrarlo.
-            } catch (e) { }
+        socket.on('new_message', (data) => {
+            if (!chatData[data.jid]) {
+                chatData[data.jid] = { name: data.name, messages: [] };
+            }
+            chatData[data.jid].messages.push(data.message);
+            updateContactList();
+            if (currentJid === data.jid) renderMessages();
+        });
+
+        async function init() {
+            const res = await fetch('/api/chats');
+            chatData = await res.json();
+            updateContactList();
+
+            // Load status
+            const statusRes = await fetch('/api/instance/status');
+            const status = await statusRes.json();
+            if (status.connected) {
+                document.getElementById('status-dot').className = "w-2 h-2 rounded-full bg-emerald-500";
+                document.getElementById('status-text').innerText = "En Línea";
+                document.getElementById('display-num').innerText = "+" + status.number;
+                document.getElementById('connected-info').classList.remove('hidden');
+            } else if (status.qrCode) {
+                document.getElementById('qr-section').classList.remove('hidden');
+                qrcodeGen.clear();
+                qrcodeGen.makeCode(status.qrCode);
+            }
         }
 
-        async function sendManual() {
-            const to = document.getElementById('test-phone').value;
-            const message = document.getElementById('test-msg').value;
+        function updateContactList() {
+            const container = document.getElementById('contact-list');
+            container.innerHTML = '';
+            Object.keys(chatData).forEach(jid => {
+                const chat = chatData[jid];
+                const lastMsg = chat.messages[chat.messages.length - 1];
+                const div = document.createElement('div');
+                div.className = `p-4 flex items-center gap-3 cursor-pointer hover:bg-slate-800 transition ${currentJid === jid ? 'bg-slate-800 border-l-4 border-indigo-500' : ''}`;
+                div.onclick = () => selectChat(jid);
+                div.innerHTML = `
+                    <div class="w-10 h-10 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-400 font-bold">
+                        ${chat.name.charAt(0)}
+                    </div>
+                    <div class="flex-1 overflow-hidden">
+                        <div class="flex justify-between items-center">
+                            <h4 class="text-xs font-bold text-white truncate">${chat.name}</h4>
+                            <span class="text-[9px] text-slate-500">${new Date(lastMsg?.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        </div>
+                        <p class="text-[10px] text-slate-400 truncate mt-1">${lastMsg?.text || ''}</p>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
 
-            const res = await fetch('/api/instance/send', {
+        function selectChat(jid) {
+            currentJid = jid;
+            document.getElementById('active-contact-name').innerText = chatData[jid].name;
+            updateContactList();
+            renderMessages();
+        }
+
+        function renderMessages() {
+            const container = document.getElementById('chat-messages');
+            container.innerHTML = '';
+            const messages = [...chatData[currentJid].messages].reverse();
+            messages.forEach(msg => {
+                const div = document.createElement('div');
+                div.className = `flex ${msg.fromMe ? 'justify-end' : 'justify-start'}`;
+                div.innerHTML = `
+                    <div class="max-w-[80%] px-4 py-2 ${msg.fromMe ? 'chat-bubble-me' : 'chat-bubble-them'}">
+                        <p class="text-sm">${msg.text}</p>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('chat-input');
+            const message = input.value.trim();
+            if (!message || !currentJid) return;
+
+            const to = currentJid.split('@')[0];
+            await fetch('/api/instance/send', {
                 method: 'POST',
-                headers: {
-                    'Authorization': API_TOKEN,
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ to, message })
             });
 
-            const result = await res.json();
-            if (result.status === "sent") {
-                alert("✅ Mensaje enviado correctamente desde Luxapp Engine");
-                document.getElementById('test-msg').value = "";
-            } else {
-                alert("❌ Error: " + result.error);
-            }
+            input.value = '';
         }
 
-        async function logout() {
-            if (confirm("¿Deseas desconectar la instancia de WhatsApp?")) {
-                await fetch('/api/instance/logout', {
-                    method: 'POST',
-                    headers: { 'Authorization': API_TOKEN }
-                });
-                location.reload();
-            }
+        async function updateAIConfig(showNotif = false) {
+            const config = {
+                enabled: document.getElementById('ai-toggle').checked,
+                prompt: document.getElementById('ai-prompt').value,
+                apiKey: document.getElementById('ai-key').value
+            };
+            await fetch('/api/ai/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config)
+            });
+            if (showNotif) alert("✅ Configuración de IA guardada");
         }
 
-        // Actualizar URLs con la base actual
-        document.getElementById('url-send').innerText = window.location.origin + "/api/instance/send";
-        document.getElementById('url-receive').innerText = window.location.origin + "/api/instance/messages";
+        document.getElementById('chat-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
 
-        setInterval(refreshData, 3000);
-        refreshData();
+        init();
     </script>
 </body>
 

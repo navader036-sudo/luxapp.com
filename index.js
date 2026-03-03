@@ -1,177 +1,184 @@
 require('dotenv').config();
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('baileys');
 const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
 const pino = require('pino');
 const fs = require('fs');
+const { OpenAI } = require('openai');
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
+
 app.use(express.json());
-app.use(express.static('public')); // Servir archivos estáticos
+app.use(express.static('public'));
 
 // CONFIGURACIÓN PRIVADA
-const API_TOKEN = "MI_TOKEN_SECRETO_123";
+const API_TOKEN = process.env.API_TOKEN || "MI_TOKEN_SECRETO_123";
 let sock = null;
 let qrBase64 = null;
-let receivedMessages = [];
-// Lista de números permitidos (whitelist)
-const allowedNumbers = [];
+
+// MEMORIA DEL SISTEMA
+let chatHistory = {}; // { jid: { name: '', messages: [] } }
+let aiConfig = {
+    enabled: false,
+    prompt: "Eres un asistente virtual de Luxapp. Responde de manera profesional y amable.",
+    apiKey: process.env.OPENAI_API_KEY || ""
+};
+
+const openai = aiConfig.apiKey ? new OpenAI({ apiKey: aiConfig.apiKey }) : null;
 
 console.log('--- Configuración inicializada ---');
 
 async function connectToWhatsApp() {
+    if (sock) {
+        try { sock.ws.close(); } catch (e) { }
+    }
+
     const { state, saveCreds } = await useMultiFileAuthState('auth_luxapp');
-    const { version, isLatest } = await fetchLatestBaileysVersion();
-    console.log(`--- Usando v${version.join('.')} (Latest: ${isLatest}) ---`);
+    const { version } = await fetchLatestBaileysVersion();
+
+    console.log(`--- Iniciando motor Luxapp v${version.join('.')} ---`);
 
     sock = makeWASocket({
         version,
         auth: state,
         logger: pino({ level: 'silent' }),
+        printQRInTerminal: false,
     });
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-
         if (qr) {
             qrBase64 = qr;
-            console.log('⚡ Nuevo código QR generado. Escanéalo en el panel web.');
+            io.emit('qr', qr);
         }
-
         if (connection === 'open') {
             qrBase64 = null;
+            io.emit('status', { connected: true, user: sock.user.id.split(':')[0] });
             console.log('✅ Luxapp está conectado y listo.');
         }
-
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            console.log('❌ Conexión cerrada. Reintentando:', shouldReconnect);
-            if (shouldReconnect) connectToWhatsApp();
+            io.emit('status', { connected: false });
+            if (shouldReconnect) {
+                setTimeout(() => connectToWhatsApp(), statusCode === 440 ? 10000 : 5000);
+            }
         }
     });
 
-    sock.ev.on('messages.upsert', m => {
+    sock.ev.on('messages.upsert', async m => {
         const msg = m.messages[0];
         if (!msg.message || msg.key.fromMe) return;
 
-        // Guardamos el mensaje en el buffer para que tu sistema administrativo lo recoja
-        receivedMessages.push({
+        const jid = msg.key.remoteJid;
+        const from = jid.split('@')[0];
+        const pushName = msg.pushName || from;
+        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "Multimedia";
+
+        // Guardar en historial
+        if (!chatHistory[jid]) chatHistory[jid] = { name: pushName, messages: [] };
+        const newMsg = {
             id: msg.key.id,
-            from: msg.key.remoteJid.split('@')[0],
-            pushName: msg.pushName,
-            text: msg.message.conversation || msg.message.extendedTextMessage?.text || "Multimedia",
+            fromMe: false,
+            text,
             timestamp: msg.messageTimestamp
-        });
+        };
+        chatHistory[jid].messages.push(newMsg);
+
+        // Notificar al Helpdesk vía Socket
+        io.emit('new_message', { jid, name: pushName, message: newMsg });
+
+        // Lógica de Asistente Virtual
+        if (aiConfig.enabled && !msg.key.remoteJid.includes('@g.us')) {
+            await handleAIResponse(jid, text);
+        }
     });
 }
 
-// --- ENDPOINTS PARA TU SISTEMA ADMINISTRATIVO ---
+async function handleAIResponse(jid, userText) {
+    if (!aiConfig.apiKey) return;
 
-// 1. Consultar estado y obtener QR
+    try {
+        const chatCompletion = await openai.chat.completions.create({
+            messages: [
+                { role: "system", content: aiConfig.prompt },
+                { role: "user", content: userText }
+            ],
+            model: "gpt-3.5-turbo",
+        });
+
+        const aiText = chatCompletion.choices[0].message.content;
+        await sock.sendMessage(jid, { text: aiText });
+
+        // Guardar respuesta de la IA
+        const aiMsg = {
+            id: 'ai_' + Date.now(),
+            fromMe: true,
+            text: aiText,
+            timestamp: Math.floor(Date.now() / 1000)
+        };
+        chatHistory[jid].messages.push(aiMsg);
+        io.emit('new_message', { jid, name: chatHistory[jid].name, message: aiMsg });
+
+    } catch (e) {
+        console.error("Error AI:", e.message);
+    }
+}
+
+// --- ENDPOINTS PARA EL PANEL ---
+
 app.get('/api/instance/status', (req, res) => {
-    const token = req.headers['authorization'];
-    if (token !== API_TOKEN) return res.status(401).json({ error: "No autorizado" });
-
     res.json({
-        connected: sock?.user ? true : false,
+        connected: !!sock?.user,
         number: sock?.user?.id ? sock.user.id.split(':')[0] : null,
-        qrCode: qrBase64, // Tu sistema puede usar este string para mostrar el QR
-        info: "Si connected es false y qrCode tiene valor, muestra el QR en tu sistema."
+        qrCode: qrBase64
     });
 });
 
-// 2. Enviar Mensaje (Tu sistema administrativo llama aquí)
+app.get('/api/chats', (req, res) => {
+    res.json(chatHistory);
+});
+
+app.post('/api/ai/config', (req, res) => {
+    const { enabled, prompt, apiKey } = req.body;
+    if (enabled !== undefined) aiConfig.enabled = enabled;
+    if (prompt) aiConfig.prompt = prompt;
+    if (apiKey !== undefined) aiConfig.apiKey = apiKey;
+    res.json({ status: "success", config: aiConfig });
+});
+
 app.post('/api/instance/send', async (req, res) => {
-    const token = req.headers['authorization'];
     const { to, message } = req.body;
-
-    if (token !== API_TOKEN) return res.status(401).json({ error: "No autorizado" });
     if (!sock?.user) return res.status(503).json({ error: "WhatsApp no conectado" });
-
-    // Verificar envío masivo
-    if (Array.isArray(to)) {
-        return res.status(400).json({ error: "Envio masivo no permitido", warning: "No se permite envío de mensajes a múltiples números simultáneamente" });
-    }
-
-    // Verificar número en whitelist (opcional)
-    if (allowedNumbers.length && !allowedNumbers.includes(to)) {
-        return res.status(403).json({ error: "Número no autorizado", warning: "El número no está en la lista de números permitidos" });
-    }
 
     try {
         const jid = `${to}@s.whatsapp.net`;
         await sock.sendMessage(jid, { text: message });
-        res.json({ status: "sent", to: to, warning: "Recuerda que no se pueden enviar mensajes masivos" });
 
-        // 3b. Responder a un mensaje recibido (reply)
-        app.post('/api/instance/reply', async (req, res) => {
-            const token = req.headers['authorization'];
-            const { to, message, replyTo } = req.body;
+        // Guardar en historial
+        if (!chatHistory[jid]) chatHistory[jid] = { name: to, messages: [] };
+        const myMsg = { id: Date.now().toString(), fromMe: true, text: message, timestamp: Math.floor(Date.now() / 1000) };
+        chatHistory[jid].messages.push(myMsg);
+        io.emit('new_message', { jid, name: chatHistory[jid].name, message: myMsg });
 
-            if (token !== API_TOKEN) return res.status(401).json({ error: "No autorizado" });
-            if (!sock?.user) return res.status(503).json({ error: "WhatsApp no conectado" });
-
-            // Validar envío masivo (solo un número)
-            if (Array.isArray(to)) {
-                return res.status(400).json({ error: "Envio masivo no permitido", warning: "No se permite envío de mensajes a múltiples números simultáneamente" });
-            }
-
-            // Validar whitelist
-            if (allowedNumbers.length && !allowedNumbers.includes(to)) {
-                return res.status(403).json({ error: "Número no autorizado", warning: "El número no está en la lista de números permitidos" });
-            }
-
-            if (!replyTo) return res.status(400).json({ error: "replyTo (id del mensaje) es requerido" });
-
-            try {
-                const jid = `${to}@s.whatsapp.net`;
-                await sock.sendMessage(jid, { text: message, quoted: { key: { id: replyTo, remoteJid: jid } } });
-                res.json({ status: "sent", to, replyTo, warning: "Recuerda que no se pueden enviar mensajes masivos" });
-            } catch (e) {
-                res.status(500).json({ error: e.message });
-            }
-        });
+        res.json({ status: "sent" });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
-// 3. Consultar mensajes recibidos (Pulling)
-app.get('/api/instance/messages', (req, res) => {
-    const token = req.headers['authorization'];
-    if (token !== API_TOKEN) return res.status(401).json({ error: "No autorizado" });
-
-    const messagesToDeliver = [...receivedMessages];
-    receivedMessages = [];
-    res.json({ count: messagesToDeliver.length, messages: messagesToDeliver });
-});
-
-// 4. Añadir número a la lista de permitidos
-app.post('/api/instance/add-number', (req, res) => {
-    const token = req.headers['authorization'];
-    const { number } = req.body;
-    if (token !== API_TOKEN) return res.status(401).json({ error: "No autorizado" });
-    if (!number) return res.status(400).json({ error: "Número requerido" });
-    if (!allowedNumbers.includes(number)) {
-        allowedNumbers.push(number);
-    }
-    res.json({ status: "added", number, allowedNumbers });
-});
-
-// 4. Cerrar sesión completamente
-app.post('/api/instance/logout', async (req, res) => {
-    const token = req.headers['authorization'];
-    if (token !== API_TOKEN) return res.status(401).json({ error: "No autorizado" });
-
-    if (sock) await sock.logout();
-    if (fs.existsSync('auth_luxapp')) fs.rmSync('auth_luxapp', { recursive: true, force: true });
-    res.json({ status: "logged_out" });
-    setTimeout(() => process.exit(0), 1000);
-});
-
-app.listen(3000, () => {
-    console.log("🚀 LUXAPP ENGINE RUNNING ON PORT 3000");
+server.listen(3000, () => {
+    console.log("🚀 LUXAPP HELPDESK & ENGINE RUNNING ON PORT 3000");
     connectToWhatsApp();
+});
+
+process.on('SIGINT', async () => {
+    console.log('--- Apagando servidor Luxapp ---');
+    if (sock) try { await sock.logout(); } catch (e) { }
+    process.exit(0);
 });
