@@ -87,6 +87,90 @@
 
 <body class="h-screen flex">
 
+    <!-- AUTH OVERLAY -->
+    <div id="auth-overlay"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-[#020617] bg-opacity-95 backdrop-blur-[10px] hidden transition-opacity duration-300">
+        <div
+            class="glass-card w-full max-w-md p-10 rounded-[2.5rem] shadow-2xl border border-white/10 relative overflow-hidden">
+            <div class="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 blur-[100px] rounded-full -mr-32 -mt-32">
+            </div>
+
+            <div class="text-center mb-8 relative">
+                <h1 class="text-3xl font-extrabold text-white tracking-tighter italic">LUX<span
+                        class="text-indigo-500">APP</span></h1>
+                <p class="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-2" id="auth-subtitle">Acceso
+                    al Sistema</p>
+            </div>
+
+            <div id="login-form">
+                <div class="space-y-5 relative">
+                    <div>
+                        <label
+                            class="text-[10px] font-extrabold text-slate-500 uppercase tracking-[0.2em] block mb-2">Usuario</label>
+                        <div class="relative">
+                            <i class="fas fa-user absolute left-4 top-1/2 -translate-y-1/2 text-slate-600"></i>
+                            <input type="text" id="login-user"
+                                class="w-full bg-slate-950/50 border border-white/10 p-4 pl-12 rounded-2xl text-white outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all"
+                                placeholder="admin">
+                        </div>
+                    </div>
+                    <div>
+                        <label
+                            class="text-[10px] font-extrabold text-slate-500 uppercase tracking-[0.2em] block mb-2">Contraseña</label>
+                        <div class="relative">
+                            <i class="fas fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-600"></i>
+                            <input type="password" id="login-pass"
+                                class="w-full bg-slate-950/50 border border-white/10 p-4 pl-12 rounded-2xl text-white outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all"
+                                placeholder="••••••••" onkeypress="if(event.key === 'Enter') doLogin()">
+                        </div>
+                    </div>
+                    <button onclick="doLogin()"
+                        class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-4 rounded-2xl transition-all uppercase text-xs tracking-[0.2em] shadow-xl shadow-indigo-500/20 active:scale-[0.98] mt-2">
+                        Iniciar Sesión
+                    </button>
+                    <p class="text-center text-xs text-slate-400 mt-4">
+                        ¿No tienes cuenta? <a href="#" onclick="toggleAuth('register')"
+                            class="text-indigo-400 font-bold hover:text-indigo-300">Regístrate</a>
+                    </p>
+                </div>
+            </div>
+
+            <div id="register-form" class="hidden">
+                <div class="space-y-5 relative">
+                    <div>
+                        <label
+                            class="text-[10px] font-extrabold text-slate-500 uppercase tracking-[0.2em] block mb-2">Nuevo
+                            Usuario</label>
+                        <div class="relative">
+                            <i class="fas fa-user-plus absolute left-4 top-1/2 -translate-y-1/2 text-slate-600"></i>
+                            <input type="text" id="reg-user"
+                                class="w-full bg-slate-950/50 border border-white/10 p-4 pl-12 rounded-2xl text-white outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all"
+                                placeholder="nuevo_usuario">
+                        </div>
+                    </div>
+                    <div>
+                        <label
+                            class="text-[10px] font-extrabold text-slate-500 uppercase tracking-[0.2em] block mb-2">Contraseña</label>
+                        <div class="relative">
+                            <i class="fas fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-600"></i>
+                            <input type="password" id="reg-pass"
+                                class="w-full bg-slate-950/50 border border-white/10 p-4 pl-12 rounded-2xl text-white outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all"
+                                placeholder="••••••••" onkeypress="if(event.key === 'Enter') doRegister()">
+                        </div>
+                    </div>
+                    <button onclick="doRegister()"
+                        class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl transition-all uppercase text-xs tracking-[0.2em] shadow-xl shadow-emerald-500/20 active:scale-[0.98] mt-2">
+                        Crear Cuenta
+                    </button>
+                    <p class="text-center text-xs text-slate-400 mt-4">
+                        ¿Ya tienes cuenta? <a href="#" onclick="toggleAuth('login')"
+                            class="text-emerald-400 font-bold hover:text-emerald-300">Inicia Sesión</a>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- SIDEBAR -->
     <aside class="w-64 border-r border-slate-800 flex flex-col">
         <div class="p-8">
@@ -487,12 +571,83 @@
         let chatData = {};
         const qrcodeGen = new QRCode(document.getElementById("qrcode"), { width: 180, height: 180 });
 
-        const API_KEY = "tu_api_key_secreta_aqui";
+        let API_KEY = localStorage.getItem('lux_token') || "";
+
+        function toggleAuth(mode) {
+            if (mode === 'register') {
+                document.getElementById('login-form').classList.add('hidden');
+                document.getElementById('register-form').classList.remove('hidden');
+                document.getElementById('auth-subtitle').innerText = "Crear Nueva Cuenta";
+            } else {
+                document.getElementById('register-form').classList.add('hidden');
+                document.getElementById('login-form').classList.remove('hidden');
+                document.getElementById('auth-subtitle').innerText = "Acceso al Sistema";
+            }
+        }
+
+        async function doLogin() {
+            const user = document.getElementById('login-user').value.trim();
+            const pass = document.getElementById('login-pass').value.trim();
+            if (!user || !pass) return alert("Completa los datos");
+
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: user, password: pass })
+                });
+                const data = await res.json();
+                if (data.token) {
+                    API_KEY = data.token;
+                    localStorage.setItem('lux_token', API_KEY);
+                    document.getElementById('auth-overlay').classList.add('hidden');
+                    init();
+                    loadCreds();
+                } else {
+                    alert(data.error || "Error al iniciar sesión");
+                }
+            } catch (e) {
+                alert("Error de conexión");
+            }
+        }
+
+        async function doRegister() {
+            const user = document.getElementById('reg-user').value.trim();
+            const pass = document.getElementById('reg-pass').value.trim();
+            if (!user || !pass) return alert("Completa los datos");
+
+            try {
+                const res = await fetch('/api/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: user, password: pass })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert("Cuenta creada correctamente. Ahora inicia sesión.");
+                    toggleAuth('login');
+                } else {
+                    alert(data.error || "Error al registrar");
+                }
+            } catch (e) {
+                alert("Error de conexión");
+            }
+        }
+
+        function showLogin() {
+            document.getElementById('auth-overlay').classList.remove('hidden');
+            localStorage.removeItem('lux_token');
+            API_KEY = "";
+        }
 
         async function apiFetch(url, options = {}) {
             if (!options.headers) options.headers = {};
             options.headers['x-api-key'] = API_KEY;
-            return fetch(url, options);
+            const res = await fetch(url, options);
+            if (res.status === 401) {
+                showLogin();
+            }
+            return res;
         }
 
         function switchTab(tab) {
@@ -785,8 +940,11 @@
             if (e.key === 'Enter') sendMessage();
         });
 
-        init();
-        loadCreds();
+        if (API_KEY) {
+            init().then(() => loadCreds()).catch(() => showLogin());
+        } else {
+            showLogin();
+        }
     </script>
 </body>
 

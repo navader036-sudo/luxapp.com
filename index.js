@@ -45,6 +45,12 @@ async function initDB() {
 
     try {
         await pool.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username TEXT UNIQUE,
+                password TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS ai_config (
                 id SERIAL PRIMARY KEY,
                 enabled BOOLEAN DEFAULT false,
@@ -268,6 +274,34 @@ async function handleAIResponse(jid, userText, name) {
         console.error("Error AI:", e.message);
     }
 }
+
+// --- ENDPOINTS DE AUTENTICACION ---
+app.post('/api/register', async (req, res) => {
+    const { username, password } = req.body;
+    if (!username || !password) return res.status(400).json({ error: "Faltan datos" });
+    const hpass = crypto.createHash('sha256').update(password).digest('hex');
+    try {
+        await pool.query('INSERT INTO users (username, password) VALUES ($1, $2)', [username, hpass]);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(400).json({ error: "El usuario ya existe o hubo un error" });
+    }
+});
+
+app.post('/api/login', async (req, res) => {
+    const { username, password } = req.body;
+    const hpass = crypto.createHash('sha256').update(password).digest('hex');
+    try {
+        const result = await pool.query('SELECT * FROM users WHERE username = $1 AND password = $2', [username, hpass]);
+        if (result.rows.length > 0) {
+            res.json({ token: process.env.API_KEY });
+        } else {
+            res.status(401).json({ error: "Credenciales inválidas" });
+        }
+    } catch (e) {
+        res.status(500).json({ error: "Error en el servidor" });
+    }
+});
 
 // --- ENDPOINTS ---
 
