@@ -1,12 +1,17 @@
+const crypto = require('crypto');
+if (!globalThis.crypto) {
+    globalThis.crypto = crypto.webcrypto;
+}
 const { Pool } = require('pg');
 require('dotenv').config();
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('baileys');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const pino = require('pino');
 const fs = require('fs');
 const { OpenAI } = require('openai');
+const Anthropic = require('@anthropic-ai/sdk');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
 const server = http.createServer(app);
@@ -32,14 +37,24 @@ function validateAPI(req, res, next) {
 }
 
 async function initDB() {
+    if (!process.env.DATABASE_URL) {
+        console.error('❌ Error: La variable DATABASE_URL no está configurada en el archivo .env');
+        console.error('⚠️  Por favor, asegúrate de proporcionar una cadena de conexión válida (ej. postgres://user:pass@localhost:5432/db).');
+        throw new Error("DATABASE_URL no configurada");
+    }
+
     try {
         await pool.query(`
             CREATE TABLE IF NOT EXISTS ai_config (
                 id SERIAL PRIMARY KEY,
                 enabled BOOLEAN DEFAULT false,
                 prompt TEXT DEFAULT 'Eres un asistente virtual de Luxapp. Responde de manera profesional y amable.',
-                api_key TEXT DEFAULT ''
+                api_key TEXT DEFAULT '',
+                provider TEXT DEFAULT 'openai'
             );
+            /* Agregar columna provider si no existe en una db vieja */
+            ALTER TABLE ai_config ADD COLUMN IF NOT EXISTS provider TEXT DEFAULT 'openai';
+
             CREATE TABLE IF NOT EXISTS chats (
                 jid TEXT PRIMARY KEY,
                 name TEXT,
@@ -60,15 +75,15 @@ async function initDB() {
         // Cargar config inicial
         const res = await pool.query('SELECT * FROM ai_config LIMIT 1');
         if (res.rows.length === 0) {
-            await pool.query('INSERT INTO ai_config (enabled) VALUES (false)');
+            await pool.query('INSERT INTO ai_config (enabled, provider) VALUES (false, $1)', ['openai']);
         } else {
             aiConfig = res.rows[0];
-            if (aiConfig.api_key) {
-                openai = new OpenAI({ apiKey: aiConfig.api_key });
-            }
+            initProviderClient(aiConfig.provider, aiConfig.api_key);
         }
+
     } catch (err) {
-        console.error('❌ Error inicializando DB:', err.message);
+        console.error('❌ Error inicializando DB:', err.message || err);
+        throw err;
     }
 }
 
@@ -78,10 +93,33 @@ let qrBase64 = null;
 let aiConfig = {
     enabled: false,
     prompt: "Eres un asistente virtual de Luxapp. Responde de manera profesional y amable.",
-    api_key: ""
+    api_key: "",
+    provider: "openai"
 };
 
 let openai = null;
+let anthropic = null;
+let gemini = null;
+
+function initProviderClient(provider, apiKey) {
+    if (!apiKey) return;
+    try {
+        if (provider === 'openai') {
+            openai = new OpenAI({ apiKey });
+        } else if (provider === 'anthropic') {
+            anthropic = new Anthropic({ apiKey });
+        } else if (provider === 'gemini') {
+            gemini = new GoogleGenerativeAI(apiKey);
+        } else if (provider === 'openrouter') {
+            openai = new OpenAI({
+                baseURL: "https://openrouter.ai/api/v1",
+                apiKey: apiKey,
+            });
+        }
+    } catch (err) {
+        console.error(`Error inicializando proveedor ${provider}:`, err);
+    }
+}
 
 console.log('--- Configuración inicializada ---');
 
@@ -89,6 +127,8 @@ async function connectToWhatsApp() {
     if (sock) {
         try { sock.ws.close(); } catch (e) { }
     }
+
+    const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = await import('baileys');
 
     const { state, saveCreds } = await useMultiFileAuthState('auth_luxapp');
     const { version } = await fetchLatestBaileysVersion();
@@ -176,20 +216,42 @@ async function saveMessage(jid, name, fromMe, text, msgId, timestamp) {
     }
 }
 
-async function handleAIResponse(jid, userText, name) {
-    if (!aiConfig.api_key) return;
-    if (!openai) openai = new OpenAI({ apiKey: aiConfig.api_key });
-
-    try {
+async function getProviderResponse(provider, userText, systemPrompt) {
+    if ((provider === 'openai' || provider === 'openrouter') && openai) {
         const chatCompletion = await openai.chat.completions.create({
             messages: [
-                { role: "system", content: aiConfig.prompt },
+                { role: "system", content: systemPrompt },
                 { role: "user", content: userText }
             ],
-            model: "gpt-3.5-turbo",
+            model: provider === 'openrouter' ? "google/gemini-2.5-flash" : "gpt-3.5-turbo",
         });
+        return chatCompletion.choices[0].message.content;
+    } else if (provider === 'anthropic' && anthropic) {
+        const msg = await anthropic.messages.create({
+            model: "claude-3-haiku-20240307",
+            max_tokens: 1024,
+            system: systemPrompt,
+            messages: [{ role: "user", content: userText }],
+        });
+        return msg.content[0].text;
+    } else if (provider === 'gemini' && gemini) {
+        const model = gemini.getGenerativeModel({
+            model: 'gemini-2.5-flash',
+            systemInstruction: systemPrompt
+        });
+        const result = await model.generateContent(userText);
+        return result.response.text();
+    }
+    throw new Error('Proveedor no soportado, mal configurado o sin API Key');
+}
 
-        const aiText = chatCompletion.choices[0].message.content;
+async function handleAIResponse(jid, userText, name) {
+    if (!aiConfig.api_key) return;
+    if (!aiConfig.provider) aiConfig.provider = 'openai';
+    initProviderClient(aiConfig.provider, aiConfig.api_key); // Ensure initialized
+
+    try {
+        const aiText = await getProviderResponse(aiConfig.provider, userText, aiConfig.prompt);
         await sock.sendMessage(jid, { text: aiText });
 
         const msgId = 'ai_' + Date.now();
@@ -246,27 +308,39 @@ app.get('/api/messages/recent', validateAPI, async (req, res) => {
     }
 });
 
-app.get('/api/creds', validateAPI, (req, res) => {
+app.get('/api/creds', validateAPI, async (req, res) => {
+    // También devolver la config actual de la IA para el frontend
+    const aiConfigRes = await pool.query('SELECT enabled, prompt, api_key, provider FROM ai_config LIMIT 1');
+    const dbConfig = aiConfigRes.rows[0] || {};
+
     res.json({
         apiKey: process.env.API_KEY,
         sendUrl: `${req.protocol}://${req.get('host')}/api/instance/send`,
-        receiveUrl: `${req.protocol}://${req.get('host')}/api/messages/recent`
+        receiveUrl: `${req.protocol}://${req.get('host')}/api/messages/recent`,
+        aiConfig: {
+            enabled: dbConfig.enabled,
+            prompt: dbConfig.prompt,
+            apiKey: dbConfig.api_key,
+            provider: dbConfig.provider || 'openai'
+        }
     });
 });
 
 app.post('/api/ai/config', validateAPI, async (req, res) => {
-    const { enabled, prompt, apiKey } = req.body;
+    const { enabled, prompt, apiKey, provider } = req.body;
+    const finalProvider = provider || 'openai';
     try {
         await pool.query(`
             UPDATE ai_config SET 
                 enabled = $1, 
                 prompt = $2, 
-                api_key = $3
+                api_key = $3,
+                provider = $4
             WHERE id = (SELECT id FROM ai_config LIMIT 1)
-        `, [enabled, prompt, apiKey]);
+        `, [enabled, prompt, apiKey, finalProvider]);
 
-        aiConfig = { enabled, prompt, api_key: apiKey };
-        if (apiKey) openai = new OpenAI({ apiKey });
+        aiConfig = { enabled, prompt, api_key: apiKey, provider: finalProvider };
+        initProviderClient(finalProvider, apiKey);
 
         res.json({ status: "success", config: aiConfig });
     } catch (e) {
@@ -277,18 +351,11 @@ app.post('/api/ai/config', validateAPI, async (req, res) => {
 app.post('/api/ai/test', validateAPI, async (req, res) => {
     const { message } = req.body;
     if (!aiConfig.api_key) return res.status(400).json({ error: "API Key no configurada" });
-    if (!openai) openai = new OpenAI({ apiKey: aiConfig.api_key });
+    initProviderClient(aiConfig.provider, aiConfig.api_key);
 
     try {
-        const chatCompletion = await openai.chat.completions.create({
-            messages: [
-                { role: "system", content: aiConfig.prompt },
-                { role: "user", content: message }
-            ],
-            model: "gpt-3.5-turbo",
-        });
-
-        res.json({ response: chatCompletion.choices[0].message.content });
+        const aiText = await getProviderResponse(aiConfig.provider, message, aiConfig.prompt);
+        res.json({ response: aiText });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -316,6 +383,17 @@ app.post('/api/instance/send', validateAPI, async (req, res) => {
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
+});
+
+app.post('/api/instance/logout', validateAPI, async (req, res) => {
+    if (sock) {
+        try { await sock.logout(); } catch (e) { }
+    }
+    try {
+        fs.rmSync('auth_luxapp', { recursive: true, force: true });
+    } catch (e) { }
+    connectToWhatsApp();
+    res.json({ status: "logged_out" });
 });
 
 server.listen(3000, async () => {

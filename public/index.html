@@ -96,9 +96,9 @@
         </div>
 
         <nav class="flex-1 px-4 space-y-2">
-            <button onclick="switchTab('dash')" id="btn-dash"
+            <button onclick="switchTab('phones')" id="btn-phones"
                 class="sidebar-item active w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all">
-                <i class="fas fa-chart-pie w-5"></i> Dashboard
+                <i class="fas fa-phone-alt w-5"></i> Mis Teléfonos
             </button>
             <button onclick="switchTab('helpdesk')" id="btn-helpdesk"
                 class="sidebar-item w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all hover:bg-slate-800/50">
@@ -126,51 +126,64 @@
     <!-- CONTENT -->
     <main class="flex-1 flex flex-col h-screen overflow-hidden">
         <header class="h-16 border-b border-slate-800 flex items-center px-8 bg-slate-950/50">
-            <h2 id="tab-title" class="text-sm font-bold uppercase tracking-widest text-slate-400">Dashboard</h2>
+            <h2 id="tab-title" class="text-sm font-bold uppercase tracking-widest text-slate-400">Mis Teléfonos</h2>
         </header>
 
-        <div id="tab-dash" class="flex-1 overflow-y-auto p-8 space-y-6">
-            <div id="qr-section" class="max-w-xs glass-card p-6 rounded-[2rem] text-center hidden">
-                <h3 class="text-white font-bold text-sm mb-4 uppercase">Vincular WhatsApp</h3>
-                <div id="qrcode" class="mb-4"></div>
-                <p class="text-[10px] text-slate-500">Escanea para activar el Helpdesk.</p>
-            </div>
-            <div id="connected-info" class="hidden space-y-6">
-                <div class="glass-card p-8 rounded-[2rem] border-l-4 border-l-emerald-500 relative overflow-hidden">
-                    <div class="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 blur-3xl -mr-16 -mt-16"></div>
-                    <h3 class="text-emerald-400 font-extrabold text-lg mb-2 flex items-center gap-2">
-                        <i class="fas fa-check-circle"></i> Sistema Activo y Seguro
-                    </h3>
-                    <p class="text-xs text-slate-400 leading-relaxed">
-                        La API está protegida. Usa tu <code
-                            class="bg-white/5 px-2 py-1 rounded text-indigo-400 font-mono">API_KEY</code> para
-                        peticiones externas.
-                    </p>
+        <div id="tab-phones" class="flex-1 overflow-y-auto p-8 space-y-6">
+            <div class="max-w-4xl mx-auto space-y-10">
+                <div class="text-center space-y-4">
+                    <h3 class="text-4xl font-black text-white tracking-tight">Gestión de Dispositivos</h3>
+                    <p class="text-slate-400 text-sm max-w-lg mx-auto leading-relaxed">Conecta tu número de WhatsApp
+                        para empezar a usar la API y el Helpdesk.</p>
                 </div>
 
-                <!-- HERRAMIENTA DE ENVÍO RÁPIDO (MODO API) -->
-                <div class="max-w-md glass-card p-8 rounded-[2.5rem] border border-white/5 relative">
-                    <h3 class="text-white font-bold text-sm mb-6 uppercase tracking-widest flex items-center gap-2">
-                        <i class="fas fa-paper-plane text-indigo-500"></i> Envío Manual (Modo API)
-                    </h3>
-                    <div class="space-y-4">
-                        <div>
-                            <label
-                                class="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2 block">Número
-                                de Destinatario</label>
-                            <input type="text" id="api-send-num" placeholder="Ej: 54911223344"
-                                class="w-full bg-slate-950/50 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:ring-2 focus:ring-indigo-500/50 outline-none transition-all">
+                <div class="flex justify-center flex-col items-center">
+                    <div id="qr-section"
+                        class="max-w-sm w-full glass-card p-8 rounded-[2rem] text-center hidden shadow-2xl border border-white/10">
+                        <div
+                            class="w-16 h-16 bg-indigo-500/20 rounded-full flex items-center justify-center mx-auto mb-4 text-indigo-400 text-2xl">
+                            <i class="fab fa-whatsapp"></i>
                         </div>
-                        <div>
-                            <label
-                                class="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2 block">Mensaje</label>
-                            <textarea id="api-send-msg" placeholder="Hola, este es un mensaje de prueba..." rows="3"
-                                class="w-full bg-slate-950/50 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:ring-2 focus:ring-indigo-500/50 outline-none transition-all resize-none"></textarea>
+                        <h3 class="text-white font-bold text-lg mb-2">Vincular Dispositivo</h3>
+                        <p class="text-xs text-slate-400 mb-8">Abre WhatsApp en tu teléfono, ve a Dispositivos
+                            Vinculados y escanea el código QR.</p>
+                        <div id="qrcode" class="flex justify-center p-4 bg-white rounded-2xl mb-4"></div>
+                        <p class="text-[10px] text-slate-500 font-mono">Generando conexión segura...</p>
+                    </div>
+
+                    <div id="connected-info" class="w-full max-w-3xl hidden space-y-6">
+                        <div
+                            class="glass-card p-10 rounded-[2.5rem] border border-emerald-500/30 relative overflow-hidden bg-emerald-500/5 mt-4">
+                            <div
+                                class="absolute top-0 right-0 w-64 h-64 bg-emerald-500/10 blur-[100px] rounded-full -mr-32 -mt-32">
+                            </div>
+                            <div class="flex flex-col md:flex-row items-center gap-6 relative">
+                                <div
+                                    class="w-20 h-20 rounded-full bg-emerald-500/20 border border-emerald-500/50 flex items-center justify-center text-emerald-400 text-3xl shadow-[0_0_30px_rgba(16,185,129,0.3)]">
+                                    <i class="fab fa-whatsapp"></i>
+                                </div>
+                                <div class="flex-1 text-center md:text-left">
+                                    <h3
+                                        class="text-white font-black text-2xl mb-1 flex items-center justify-center md:justify-start gap-3">
+                                        WhatsApp Conectado <i class="fas fa-check-circle text-emerald-500 text-xl"></i>
+                                    </h3>
+                                    <p class="text-sm text-slate-400 mb-4">La API está conectada a tu dispositivo y
+                                        lista para operar.</p>
+                                    <div
+                                        class="inline-flex items-center gap-2 bg-slate-950/80 px-4 py-2 text-sm rounded-xl border border-white/10">
+                                        <i class="fas fa-phone-alt text-slate-500"></i>
+                                        <span id="connected-phone-display"
+                                            class="font-mono text-emerald-400 font-bold tracking-wider">Cargando...</span>
+                                    </div>
+                                </div>
+                                <div class="mt-4 md:mt-0">
+                                    <button onclick="disconnectWhatsApp()"
+                                        class="w-full md:w-auto bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 px-6 py-3 rounded-xl font-bold transition-all text-sm flex items-center justify-center gap-2">
+                                        <i class="fas fa-plug"></i> Desconectar
+                                    </button>
+                                </div>
+                            </div>
                         </div>
-                        <button onclick="manualSend()"
-                            class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-4 rounded-xl transition-all uppercase text-[10px] tracking-[0.2em] shadow-lg shadow-indigo-500/20 active:scale-95">
-                            Enviar vía API Interna
-                        </button>
                     </div>
                 </div>
             </div>
@@ -236,13 +249,31 @@
 
                     <div class="space-y-8 relative">
                         <div class="grid md:grid-cols-2 gap-6">
-                            <div class="col-span-2">
+                            <div>
                                 <label
-                                    class="text-[10px] font-extrabold text-slate-500 uppercase tracking-[0.2em] block mb-3">OpenAI
-                                    API Key</label>
+                                    class="text-[10px] font-extrabold text-slate-500 uppercase tracking-[0.2em] block mb-3">Proveedor
+                                    de IA</label>
+                                <div class="relative">
+                                    <i class="fas fa-brain absolute left-4 top-1/2 -translate-y-1/2 text-slate-600"></i>
+                                    <select id="ai-provider" onchange="updateAIConfig()"
+                                        class="w-full bg-slate-950/50 border border-white/10 p-4 pl-12 rounded-2xl text-white outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all appearance-none cursor-pointer">
+                                        <option value="openai">OpenAI (ChatGPT)</option>
+                                        <option value="anthropic">Anthropic (Claude)</option>
+                                        <option value="gemini">Google (Gemini Reflex)</option>
+                                        <option value="openrouter">OpenRouter (Gemini Libre de Restricción)</option>
+                                    </select>
+                                    <i
+                                        class="fas fa-chevron-down absolute right-4 top-1/2 -translate-y-1/2 text-slate-600 pointer-events-none text-xs"></i>
+                                </div>
+                            </div>
+                            <div>
+                                <label
+                                    class="text-[10px] font-extrabold text-slate-500 uppercase tracking-[0.2em] block mb-3">API
+                                    Key del Proveedor</label>
                                 <div class="relative">
                                     <i class="fas fa-key absolute left-4 top-1/2 -translate-y-1/2 text-slate-600"></i>
-                                    <input type="password" id="ai-key" placeholder="sk-..." onchange="updateAIConfig()"
+                                    <input type="password" id="ai-key" placeholder="Tu API Key secreta aquí..."
+                                        onchange="updateAIConfig()"
                                         class="w-full bg-slate-950/50 border border-white/10 p-4 pl-12 rounded-2xl text-white outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all">
                                 </div>
                             </div>
@@ -264,9 +295,9 @@
 
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-3xl">
                     <div class="glass-card p-6 rounded-3xl border-l-4 border-l-amber-500">
-                        <h4 class="text-white font-bold text-sm mb-1">Capacitación Activa</h4>
-                        <p class="text-[10px] text-slate-500">El modelo gpt-3.5-turbo está procesando mensajes en tiempo
-                            real.</p>
+                        <h4 class="text-white font-bold text-sm mb-1">Cerebro Conectado</h4>
+                        <p class="text-[10px] text-slate-500">El modelo seleccionado analizará las peticiones recibidas
+                            de usuarios.</p>
                     </div>
                     <div class="glass-card p-6 rounded-3xl border-l-4 border-l-indigo-500">
                         <h4 class="text-white font-bold text-sm mb-1">Contexto Global</h4>
@@ -387,20 +418,63 @@
                     </div>
                 </div>
 
-                <!-- BANNER DE PRUEBA -->
-                <div
-                    class="glass-card p-10 rounded-[3rem] border border-indigo-500/20 bg-indigo-600/[0.02] flex flex-col md:flex-row items-center gap-10">
-                    <div class="flex-1 space-y-4 text-center md:text-left">
-                        <h4 class="text-2xl font-black text-white">¿Quieres ver cómo funciona?</h4>
-                        <p class="text-slate-400 text-sm leading-relaxed">Usa nuestra herramienta de envío rápido para
-                            validar tu conexión antes de programar.</p>
-                    </div>
-                    <div class="w-full md:w-[250px]">
-                        <button onclick="switchTab('dash')"
-                            class="w-full bg-white text-slate-950 hover:bg-indigo-50 font-black py-5 rounded-2xl transition-all uppercase text-xs tracking-widest shadow-xl active:scale-95 flex items-center justify-center gap-3">
-                            <span>PROBAR AHORA</span>
-                            <i class="fas fa-rocket"></i>
-                        </button>
+                <!-- PRUEBA DE ENVIO TIPO SCANWHAT -->
+                <div class="glass-card p-8 rounded-xl border border-white/5 bg-slate-900/50 mt-10">
+                    <h3 class="text-white font-bold text-xl mb-6 flex items-center gap-3 border-b border-white/10 pb-4">
+                        <i class="fas fa-envelope text-indigo-500"></i> Prueba de Envío de Mensaje
+                    </h3>
+                    <div class="space-y-5">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label class="text-sm font-bold text-slate-300 mb-2 block">UID de la cuenta de
+                                    WhatsApp:</label>
+                                <select id="sim-uid"
+                                    class="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white outline-none cursor-pointer focus:border-indigo-500 transition-all">
+                                    <option value="">-- Seleccione un número --</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="text-sm font-bold text-slate-300 mb-2 block">Token de API:</label>
+                                <div class="relative">
+                                    <i
+                                        class="fas fa-fingerprint absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"></i>
+                                    <input type="text" id="sim-token" readonly
+                                        placeholder="Se autocompletará al seleccionar un número"
+                                        class="w-full bg-slate-950/50 border border-white/5 rounded-lg px-4 py-2.5 pl-10 text-sm text-slate-500 outline-none cursor-not-allowed">
+                                </div>
+                            </div>
+                            <div class="md:col-span-2">
+                                <label class="text-sm font-bold text-slate-300 mb-2 block">Grupos (Opcional):</label>
+                                <div class="relative">
+                                    <i class="fas fa-users absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"></i>
+                                    <select disabled
+                                        class="w-full bg-slate-950/50 border border-white/5 rounded-lg px-4 py-2.5 pl-10 text-sm text-slate-500 outline-none cursor-not-allowed">
+                                        <option value="">-- Seleccione un número primero --</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="md:col-span-2">
+                                <label class="text-sm font-bold text-slate-300 mb-2 block">Cuenta del
+                                    destinatario:</label>
+                                <div class="relative">
+                                    <i
+                                        class="fas fa-phone-alt absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"></i>
+                                    <input type="text" id="sim-to" placeholder="Ej: 593991234567"
+                                        class="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-2.5 pl-10 text-sm text-white focus:border-indigo-500 outline-none transition-all">
+                                </div>
+                            </div>
+                            <div class="md:col-span-2">
+                                <label class="text-sm font-bold text-slate-300 mb-2 block">Texto del mensaje:</label>
+                                <textarea id="sim-msg" placeholder="Mensaje..." rows="4"
+                                    class="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-sm text-white focus:border-indigo-500 outline-none transition-all resize-none"></textarea>
+                            </div>
+                        </div>
+                        <div class="pt-4 flex justify-start">
+                            <button onclick="simSend()"
+                                class="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-8 rounded-lg transition-all text-sm shadow-lg shadow-indigo-500/20 active:scale-95 flex items-center justify-center gap-2">
+                                Enviar <i class="fas fa-paper-plane"></i>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -413,7 +487,7 @@
         let chatData = {};
         const qrcodeGen = new QRCode(document.getElementById("qrcode"), { width: 180, height: 180 });
 
-        const API_KEY = "mi_token_super_secreto_123";
+        const API_KEY = "tu_api_key_secreta_aqui";
 
         async function apiFetch(url, options = {}) {
             if (!options.headers) options.headers = {};
@@ -435,6 +509,7 @@
             const qrSec = document.getElementById('qr-section');
             const infoSec = document.getElementById('connected-info');
             const dispNum = document.getElementById('display-num');
+            const simUid = document.getElementById('sim-uid');
 
             if (data.connected) {
                 dot.className = "w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_#10b981]";
@@ -442,11 +517,20 @@
                 qrSec.classList.add('hidden');
                 infoSec.classList.remove('hidden');
                 dispNum.innerText = "+" + data.user;
+                document.getElementById('connected-phone-display').innerText = "+" + data.user;
+                if (simUid.options.length === 1) {
+                    simUid.add(new Option('+' + data.user, data.user));
+                    // Auto-select and populate token
+                    simUid.value = data.user;
+                    document.getElementById('sim-token').value = API_KEY;
+                }
             } else {
                 dot.className = "w-2 h-2 rounded-full bg-red-500";
                 text.innerText = "Desconectado";
                 infoSec.classList.add('hidden');
                 dispNum.innerText = "Offline";
+                simUid.innerHTML = '<option value="">-- Seleccione un número --</option>';
+                document.getElementById('sim-token').value = '';
             }
         });
 
@@ -499,6 +583,7 @@
                 text.innerText = "En Línea";
                 infoSec.classList.remove('hidden');
                 dispNum.innerText = "+" + number;
+                document.getElementById('connected-phone-display').innerText = "+" + number;
             } else {
                 dot.className = "w-2 h-2 rounded-full bg-red-500";
                 text.innerText = "Desconectado";
@@ -552,6 +637,12 @@
                 document.getElementById('display-webhook-send').value = data.sendUrl;
                 document.getElementById('display-webhook-receive').value = data.receiveUrl;
             }
+            if (data.aiConfig) {
+                document.getElementById('ai-toggle').checked = data.aiConfig.enabled;
+                if (data.aiConfig.prompt) document.getElementById('ai-prompt').value = data.aiConfig.prompt;
+                if (data.aiConfig.apiKey) document.getElementById('ai-key').value = data.aiConfig.apiKey;
+                if (data.aiConfig.provider) document.getElementById('ai-provider').value = data.aiConfig.provider;
+            }
         }
 
         function copyToClipboard(id) {
@@ -600,22 +691,39 @@
             }
         }
 
-        async function manualSend() {
-            const num = document.getElementById('api-send-num').value.trim();
-            const msg = document.getElementById('api-send-msg').value.trim();
-            if (!num || !msg) return alert("Completa todos los campos");
+        document.getElementById('sim-uid').addEventListener('change', (e) => {
+            document.getElementById('sim-token').value = e.target.value ? API_KEY : '';
+        });
+
+        async function simSend() {
+            const uid = document.getElementById('sim-uid').value;
+            const to = document.getElementById('sim-to').value.trim();
+            const msg = document.getElementById('sim-msg').value.trim();
+
+            if (!uid) return alert('Por favor, seleccione un número en UID primero.');
+            if (!to || !msg) return alert('Por favor completa el destinatario y el mensaje.');
 
             const res = await apiFetch('/api/instance/send', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ to: num, message: msg })
+                body: JSON.stringify({ to, message: msg })
             });
 
             if (res.ok) {
                 alert("✅ Mensaje enviado exitosamente");
-                document.getElementById('api-send-msg').value = '';
+                document.getElementById('sim-to').value = '';
+                document.getElementById('sim-msg').value = '';
             } else {
-                alert("❌ Error al enviar. Revisa la consola.");
+                alert("❌ Error al enviar. Verifica tu conexión y consola.");
+            }
+        }
+
+        async function disconnectWhatsApp() {
+            if (!confirm('¿Estás seguro de que deseas desconectar este dispositivo de LuxApp?')) return;
+
+            const res = await apiFetch('/api/instance/logout', { method: 'POST' });
+            if (res.ok) {
+                alert("✅ Dispositivo desconectado correctamente. Se generará un nuevo QR en breve.");
             }
         }
 
@@ -623,14 +731,15 @@
             const config = {
                 enabled: document.getElementById('ai-toggle').checked,
                 prompt: document.getElementById('ai-prompt').value,
-                apiKey: document.getElementById('ai-key').value
+                apiKey: document.getElementById('ai-key').value,
+                provider: document.getElementById('ai-provider').value
             };
             await apiFetch('/api/ai/config', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(config)
             });
-            if (showNotif) alert("✅ Configuración guardada");
+            if (showNotif) alert("✅ Configuración guardada exitosamente con el proveedor seleccionado.");
             loadCreds();
         }
 
@@ -663,7 +772,7 @@
             } else {
                 const errDiv = document.createElement('div');
                 errDiv.className = "text-[9px] text-red-400 italic";
-                errDiv.innerText = "Error: " + (data.error || "No se pudo conectar con OpenAI");
+                errDiv.innerText = "Error: " + (data.error || "No se pudo conectar con el proveedor");
                 box.appendChild(errDiv);
             }
             box.scrollTop = box.scrollHeight;
