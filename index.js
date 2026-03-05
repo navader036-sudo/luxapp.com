@@ -52,39 +52,23 @@ async function initDB() {
     }
 
     try {
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
-                username TEXT UNIQUE,
-                password TEXT
-            );
+        await pool.query(`CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, username TEXT UNIQUE, password TEXT)`);
+        console.log('✅ Tabla users lista.');
 
-            CREATE TABLE IF NOT EXISTS ai_config (
-                id SERIAL PRIMARY KEY,
-                enabled BOOLEAN DEFAULT false,
-                prompt TEXT DEFAULT 'Eres un asistente virtual de Luxapp. Responde de manera profesional y amable.',
-                api_key TEXT DEFAULT '',
-                provider TEXT DEFAULT 'openai'
-            );
-            /* Agregar columna provider si no existe en una db vieja */
-            ALTER TABLE ai_config ADD COLUMN IF NOT EXISTS provider TEXT DEFAULT 'openai';
+        await pool.query(`CREATE TABLE IF NOT EXISTS ai_config (id SERIAL PRIMARY KEY, enabled BOOLEAN DEFAULT false, prompt TEXT DEFAULT '...', api_key TEXT DEFAULT '', provider TEXT DEFAULT 'openai')`);
+        console.log('✅ Tabla ai_config lista.');
 
-            CREATE TABLE IF NOT EXISTS chats (
-                jid TEXT PRIMARY KEY,
-                name TEXT,
-                last_message TEXT,
-                last_timestamp INTEGER
-            );
-            CREATE TABLE IF NOT EXISTS messages (
-                id SERIAL PRIMARY KEY,
-                msg_id TEXT UNIQUE,
-                jid TEXT,
-                from_me BOOLEAN,
-                text TEXT,
-                timestamp INTEGER
-            );
-        `);
-        console.log('✅ Base de datos inicializada.');
+        await pool.query(`ALTER TABLE ai_config ADD COLUMN IF NOT EXISTS provider TEXT DEFAULT 'openai'`);
+        await pool.query(`ALTER TABLE ai_config ADD COLUMN IF NOT EXISTS model TEXT DEFAULT ''`);
+        console.log('✅ Columnas ai_config actualizadas.');
+
+        await pool.query(`CREATE TABLE IF NOT EXISTS wh_chats (jid TEXT PRIMARY KEY, name TEXT, last_message TEXT, last_timestamp INTEGER)`);
+        console.log('✅ Tabla wh_chats lista.');
+
+        await pool.query(`CREATE TABLE IF NOT EXISTS wh_messages (id SERIAL PRIMARY KEY, msg_id TEXT UNIQUE, jid TEXT, from_me BOOLEAN, text TEXT, timestamp INTEGER)`);
+        console.log('✅ Tabla wh_messages lista.');
+
+        console.log('✅ Base de datos inicializada completamente.');
 
         // Cargar config inicial
         const res = await pool.query('SELECT * FROM ai_config LIMIT 1');
@@ -108,7 +92,8 @@ let aiConfig = {
     enabled: false,
     prompt: "Eres un asistente virtual de Luxapp. Responde de manera profesional y amable.",
     api_key: "",
-    provider: "openai"
+    provider: "openai",
+    model: ""
 };
 
 let openai = null;
@@ -179,30 +164,65 @@ async function connectToWhatsApp() {
     });
 
     sock.ev.on('messages.upsert', async m => {
-        const msg = m.messages[0];
-        if (!msg.message) return;
+        try {
+            const msg = m.messages[0];
+            if (!msg.message) return;
 
-        const jid = msg.key.remoteJid;
-        if (jid === 'status@broadcast') return;
+            const jid = msg.key.remoteJid;
+            if (jid === 'status@broadcast' || jid.includes('@newsletter') || jid.includes('@broadcast')) return;
 
-        const fromMe = msg.key.fromMe;
-        const from = jid.split('@')[0];
-        const pushName = fromMe ? (sock.user.name || 'Yo') : (msg.pushName || from);
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "Multimedia/Otro";
+            const fromMe = msg.key.fromMe;
+            const from = jid.split('@')[0];
+            const pushName = fromMe ? (sock.user?.name || 'Yo') : (msg.pushName || from);
 
-        // Guardar en DB
-        await saveMessage(jid, pushName, fromMe, text, msg.key.id, msg.messageTimestamp);
+            // Mejorar extracción de texto
+            let text = "";
+            if (msg.message.conversation) text = msg.message.conversation;
+            else if (msg.message.extendedTextMessage?.text) text = msg.message.extendedTextMessage.text;
+            else if (msg.message.imageMessage?.caption) text = msg.message.imageMessage.caption;
+            else if (msg.message.videoMessage?.caption) text = msg.message.videoMessage.caption;
+            else text = "Multimedia/Otro";
 
-        // Notificar al Helpdesk
-        io.emit('new_message', {
-            jid,
-            name: pushName,
-            message: { text, fromMe, timestamp: msg.messageTimestamp }
-        });
+            // Guardar en DB
+            await saveMessage(jid, pushName, fromMe, text, msg.key.id, msg.messageTimestamp);
 
-        // IA (Solo para mensajes entrantes y chats no grupales)
-        if (aiConfig.enabled && !fromMe && !jid.includes('@g.us')) {
-            await handleAIResponse(jid, text, pushName);
+            // Notificar al Helpdesk
+            io.emit('new_message', {
+                jid,
+                name: pushName,
+                message: { text, fromMe, timestamp: msg.messageTimestamp }
+            });
+
+            // IA (Solo para mensajes entrantes, chats no grupales y que no sean "Chat conmigo mismo")
+            if (!sock.user) return;
+            const myNumber = sock.user.id.split(':')[0].split('@')[0];
+            const isMe = jid.split('@')[0] === myNumber;
+
+            console.log(`[MSG] De: ${from} | Texto: ${text} | fromMe: ${fromMe} | AI Enabled: ${aiConfig.enabled}`);
+
+            if (aiConfig.enabled && !fromMe && !jid.includes('@g.us') && !isMe) {
+                if (text && text !== "Multimedia/Otro") {
+                    console.log(`[AI] Procesando respuesta para ${jid}...`);
+                    await handleAIResponse(jid, text, pushName);
+                }
+            }
+        } catch (err) {
+            console.error("Error en messages.upsert:", err.message);
+        }
+    });
+
+    // Sincronización de historial
+    sock.ev.on('messaging-history.set', async ({ chats, messages }) => {
+        console.log(`[SYNC] Recibidos ${chats.length} chats y ${messages.length} mensajes.`);
+        for (const chat of chats) {
+            const lastMsg = messages.filter(m => m.key.remoteJid === chat.id).sort((a, b) => b.messageTimestamp - a.messageTimestamp)[0];
+            const text = lastMsg ? (lastMsg.message?.conversation || lastMsg.message?.extendedTextMessage?.text || "Historial") : "";
+            const ts = lastMsg ? lastMsg.messageTimestamp : Math.floor(Date.now() / 1000);
+            await pool.query(`
+                INSERT INTO wh_chats (jid, name, last_message, last_timestamp)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (jid) DO UPDATE SET last_message = EXCLUDED.last_message, last_timestamp = EXCLUDED.last_timestamp
+            `, [chat.id, chat.name || chat.id.split('@')[0], text, ts]);
         }
     });
 }
@@ -211,7 +231,7 @@ async function saveMessage(jid, name, fromMe, text, msgId, timestamp) {
     try {
         // Upsert chat
         await pool.query(`
-            INSERT INTO chats (jid, name, last_message, last_timestamp)
+            INSERT INTO wh_chats (jid, name, last_message, last_timestamp)
             VALUES ($1, $2, $3, $4)
             ON CONFLICT (jid) DO UPDATE SET 
                 name = EXCLUDED.name,
@@ -221,7 +241,7 @@ async function saveMessage(jid, name, fromMe, text, msgId, timestamp) {
 
         // Insert message
         await pool.query(`
-            INSERT INTO messages (msg_id, jid, from_me, text, timestamp)
+            INSERT INTO wh_messages (msg_id, jid, from_me, text, timestamp)
             VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (msg_id) DO NOTHING
         `, [msgId, jid, fromMe, text, timestamp]);
@@ -230,42 +250,71 @@ async function saveMessage(jid, name, fromMe, text, msgId, timestamp) {
     }
 }
 
-async function getProviderResponse(provider, userText, systemPrompt) {
+async function getProviderResponse(provider, userText, systemPrompt, history = []) {
+    const selectedModel = aiConfig.model || (provider === 'openai' ? 'gpt-3.5-turbo' :
+        provider === 'anthropic' ? 'claude-3-haiku-20240307' :
+            provider === 'gemini' ? 'gemini-1.5-flash' :
+                provider === 'openrouter' ? 'google/gemini-2.0-flash-exp:free' : '');
+
+    const messages = [
+        { role: "system", content: systemPrompt },
+        ...history,
+        { role: "user", content: userText }
+    ];
+
     if ((provider === 'openai' || provider === 'openrouter') && openai) {
         const chatCompletion = await openai.chat.completions.create({
-            messages: [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: userText }
-            ],
-            model: provider === 'openrouter' ? "google/gemini-2.5-flash" : "gpt-3.5-turbo",
+            messages: messages,
+            model: selectedModel,
         });
         return chatCompletion.choices[0].message.content;
     } else if (provider === 'anthropic' && anthropic) {
+        // Anthropic usa un formato diferente para el sistema
         const msg = await anthropic.messages.create({
-            model: "claude-3-haiku-20240307",
+            model: selectedModel,
             max_tokens: 1024,
             system: systemPrompt,
-            messages: [{ role: "user", content: userText }],
+            messages: [
+                ...history,
+                { role: "user", content: userText }
+            ],
         });
         return msg.content[0].text;
     } else if (provider === 'gemini' && gemini) {
         const model = gemini.getGenerativeModel({
-            model: 'gemini-2.5-flash',
+            model: selectedModel,
             systemInstruction: systemPrompt
         });
-        const result = await model.generateContent(userText);
+        // Gemini maneja historial de forma distinta, pero simplificamos inyectando en el prompt
+        // o usando su chat sessions si fuera necesario. Por ahora unificamos el prompt.
+        const promptFull = history.map(m => `${m.role === 'user' ? 'Cliente' : 'Asistente'}: ${m.content}`).join('\n') + `\nCliente: ${userText}`;
+        const result = await model.generateContent(promptFull);
         return result.response.text();
     }
     throw new Error('Proveedor no soportado, mal configurado o sin API Key');
 }
 
 async function handleAIResponse(jid, userText, name) {
-    if (!aiConfig.api_key) return;
+    if (!aiConfig.api_key) {
+        console.log("[AI] Error: No hay API Key configurada.");
+        return;
+    }
     if (!aiConfig.provider) aiConfig.provider = 'openai';
-    initProviderClient(aiConfig.provider, aiConfig.api_key); // Ensure initialized
+    initProviderClient(aiConfig.provider, aiConfig.api_key);
 
     try {
-        const aiText = await getProviderResponse(aiConfig.provider, userText, aiConfig.prompt);
+        // Obtener historial reciente para contexto
+        const historyRes = await pool.query('SELECT from_me, text FROM wh_messages WHERE jid = $1 ORDER BY timestamp DESC LIMIT 6', [jid]);
+        const history = historyRes.rows.reverse().map(m => ({
+            role: m.from_me ? 'assistant' : 'user',
+            content: m.text
+        }));
+
+        console.log(`[AI] Solicitando respuesta de ${aiConfig.provider} (${aiConfig.model || 'default'}) para ${jid}...`);
+        const personalizedPrompt = `${aiConfig.prompt}\n\nEstás hablando con: ${name}`;
+        const aiText = await getProviderResponse(aiConfig.provider, userText, personalizedPrompt, history);
+
+        console.log(`[AI] Respuesta recibida: "${aiText.substring(0, 50)}..."`);
         await sock.sendMessage(jid, { text: aiText });
 
         const msgId = 'ai_' + Date.now();
@@ -279,7 +328,7 @@ async function handleAIResponse(jid, userText, name) {
         });
 
     } catch (e) {
-        console.error("Error AI:", e.message);
+        console.error("❌ [AI] Error detallado:", e.message);
     }
 }
 
@@ -323,9 +372,10 @@ app.get('/api/instance/status', validateAPI, (req, res) => {
 
 app.get('/api/chats', validateAPI, async (req, res) => {
     try {
-        const result = await pool.query('SELECT * FROM chats ORDER BY last_timestamp DESC');
+        const result = await pool.query('SELECT * FROM wh_chats ORDER BY last_timestamp DESC');
         res.json(result.rows);
     } catch (e) {
+        console.error(e);
         res.status(500).json({ error: "Error al obtener chats" });
     }
 });
@@ -333,17 +383,17 @@ app.get('/api/chats', validateAPI, async (req, res) => {
 app.get('/api/messages/:jid', validateAPI, async (req, res) => {
     const { jid } = req.params;
     try {
-        const result = await pool.query('SELECT * FROM messages WHERE jid = $1 ORDER BY timestamp ASC LIMIT 50', [jid]);
+        const result = await pool.query('SELECT * FROM wh_messages WHERE jid = $1 ORDER BY timestamp ASC LIMIT 50', [jid]);
         res.json(result.rows);
     } catch (e) {
-        res.status(500).json({ error: "Error al obtener mensajes" });
+        res.status(500).json({ error: e.message });
     }
 });
 
 // Nuevo endpoint para consultar TODA la recepción de mensajes (PULL)
 app.get('/api/messages/recent', validateAPI, async (req, res) => {
     try {
-        const result = await pool.query('SELECT * FROM messages ORDER BY timestamp DESC LIMIT 50');
+        const result = await pool.query('SELECT * FROM wh_messages ORDER BY timestamp DESC LIMIT 50');
         res.json(result.rows);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -352,7 +402,7 @@ app.get('/api/messages/recent', validateAPI, async (req, res) => {
 
 app.get('/api/creds', validateAPI, async (req, res) => {
     // También devolver la config actual de la IA para el frontend
-    const aiConfigRes = await pool.query('SELECT enabled, prompt, api_key, provider FROM ai_config LIMIT 1');
+    const aiConfigRes = await pool.query('SELECT enabled, prompt, api_key, provider, model FROM ai_config LIMIT 1');
     const dbConfig = aiConfigRes.rows[0] || {};
 
     res.json({
@@ -363,25 +413,28 @@ app.get('/api/creds', validateAPI, async (req, res) => {
             enabled: dbConfig.enabled,
             prompt: dbConfig.prompt,
             apiKey: dbConfig.api_key,
-            provider: dbConfig.provider || 'openai'
+            provider: dbConfig.provider || 'openai',
+            model: dbConfig.model || ''
         }
     });
 });
 
 app.post('/api/ai/config', validateAPI, async (req, res) => {
-    const { enabled, prompt, apiKey, provider } = req.body;
+    const { enabled, prompt, apiKey, provider, model } = req.body;
     const finalProvider = provider || 'openai';
+    const finalModel = model || '';
     try {
         await pool.query(`
             UPDATE ai_config SET 
                 enabled = $1, 
                 prompt = $2, 
                 api_key = $3,
-                provider = $4
+                provider = $4,
+                model = $5
             WHERE id = (SELECT id FROM ai_config LIMIT 1)
-        `, [enabled, prompt, apiKey, finalProvider]);
+        `, [enabled, prompt, apiKey, finalProvider, finalModel]);
 
-        aiConfig = { enabled, prompt, api_key: apiKey, provider: finalProvider };
+        aiConfig = { enabled, prompt, api_key: apiKey, provider: finalProvider, model: finalModel };
         initProviderClient(finalProvider, apiKey);
 
         res.json({ status: "success", config: aiConfig });
@@ -408,8 +461,7 @@ app.post('/api/instance/send', validateAPI, async (req, res) => {
     if (!sock?.user) return res.status(503).json({ error: "WhatsApp no conectado" });
 
     try {
-        const cleanTo = to.replace(/\D/g, '');
-        const jid = cleanTo.includes('@') ? cleanTo : `${cleanTo}@s.whatsapp.net`;
+        const jid = to.includes('@') ? to : `${to.replace(/\D/g, '')}@s.whatsapp.net`;
         const sent = await sock.sendMessage(jid, { text: message });
 
         const ts = Math.floor(Date.now() / 1000);

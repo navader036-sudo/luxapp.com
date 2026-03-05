@@ -54,17 +54,56 @@
         }
 
         .chat-bubble-me {
-            background: linear-gradient(135deg, #6366f1, #4f46e5);
-            color: white;
-            border-radius: 20px 20px 4px 20px;
-            box-shadow: 0 4px 15px rgba(79, 70, 229, 0.3);
+            background-color: #056162;
+            color: #e9edef;
+            border-radius: 8px 0px 8px 8px;
+            box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.13);
+            position: relative;
+        }
+
+        .chat-bubble-me::after {
+            content: "";
+            position: absolute;
+            top: 0;
+            right: -8px;
+            width: 0;
+            height: 0;
+            border-left: 8px solid #056162;
+            border-bottom: 10px solid transparent;
         }
 
         .chat-bubble-them {
-            background: rgba(30, 41, 59, 0.8);
-            color: #e2e8f0;
-            border-radius: 20px 20px 20px 4px;
-            border: 1px solid rgba(255, 255, 255, 0.05);
+            background-color: #262d31;
+            color: #e9edef;
+            border-radius: 0px 8px 8px 8px;
+            box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.13);
+            position: relative;
+        }
+
+        .chat-bubble-them::after {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: -8px;
+            width: 0;
+            height: 0;
+            border-right: 8px solid #262d31;
+            border-bottom: 10px solid transparent;
+        }
+
+        .chat-timestamp {
+            font-size: 0.65rem;
+            color: rgba(233, 237, 239, 0.6);
+            margin-top: 4px;
+            text-align: right;
+            display: block;
+        }
+
+        #chat-messages {
+            background-image: url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png');
+            background-color: #0d1418;
+            background-blend-mode: overlay;
+            background-size: contain;
         }
 
         .animate-fade-in {
@@ -521,18 +560,33 @@
                                     de IA</label>
                                 <div class="relative">
                                     <i class="fas fa-brain absolute left-4 top-1/2 -translate-y-1/2 text-slate-600"></i>
-                                    <select id="ai-provider" onchange="updateAIConfig()"
+                                    <select id="ai-provider" onchange="updateModelOptions(); updateAIConfig();"
                                         class="w-full bg-slate-950/50 border border-white/10 p-4 pl-12 rounded-2xl text-white outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all appearance-none cursor-pointer">
                                         <option value="openai">OpenAI (ChatGPT)</option>
                                         <option value="anthropic">Anthropic (Claude)</option>
                                         <option value="gemini">Google (Gemini Reflex)</option>
-                                        <option value="openrouter">OpenRouter (Gemini Libre de Restricción)</option>
+                                        <option value="openrouter">OpenRouter (Modelos Libres)</option>
                                     </select>
                                     <i
                                         class="fas fa-chevron-down absolute right-4 top-1/2 -translate-y-1/2 text-slate-600 pointer-events-none text-xs"></i>
                                 </div>
                             </div>
                             <div>
+                                <label
+                                    class="text-[10px] font-extrabold text-slate-500 uppercase tracking-[0.2em] block mb-3">Modelo
+                                    Específico</label>
+                                <div class="relative">
+                                    <i
+                                        class="fas fa-microchip absolute left-4 top-1/2 -translate-y-1/2 text-slate-600"></i>
+                                    <select id="ai-model" onchange="updateAIConfig()"
+                                        class="w-full bg-slate-950/50 border border-white/10 p-4 pl-12 rounded-2xl text-white outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all appearance-none cursor-pointer">
+                                        <!-- Modelos dinámicos -->
+                                    </select>
+                                    <i
+                                        class="fas fa-chevron-down absolute right-4 top-1/2 -translate-y-1/2 text-slate-600 pointer-events-none text-xs"></i>
+                                </div>
+                            </div>
+                            <div class="md:col-span-2">
                                 <label
                                     class="text-[10px] font-extrabold text-slate-500 uppercase tracking-[0.2em] block mb-3">API
                                     Key del Proveedor</label>
@@ -966,8 +1020,26 @@
 
         async function selectChat(jid, name) {
             currentJid = jid;
-            document.getElementById('active-contact-name').innerHTML = `<div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div> ${name}</div>`;
+            // Actualizar cabecera
+            document.getElementById('active-contact-name').innerHTML = `
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-400 font-bold text-xs">
+                        ${name.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                        <div class="text-sm font-bold text-white">${name}</div>
+                        <div class="text-[10px] text-emerald-500 flex items-center gap-1">
+                            <div class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div> Chat Activo
+                        </div>
+                    </div>
+                </div>
+            `;
+
             updateContactList();
+
+            // Limpiar y mostrar cargando
+            const container = document.getElementById('chat-messages');
+            container.innerHTML = '<div class="flex-1 flex items-center justify-center text-slate-500"><i class="fas fa-spinner fa-spin mr-2"></i> Cargando mensajes...</div>';
 
             const res = await apiFetch(`/api/messages/${jid}`);
             const messages = await res.json();
@@ -986,7 +1058,10 @@
                 document.getElementById('ai-toggle').checked = data.aiConfig.enabled;
                 if (data.aiConfig.prompt) document.getElementById('ai-prompt').value = data.aiConfig.prompt;
                 if (data.aiConfig.apiKey) document.getElementById('ai-key').value = data.aiConfig.apiKey;
-                if (data.aiConfig.provider) document.getElementById('ai-provider').value = data.aiConfig.provider;
+                if (data.aiConfig.provider) {
+                    document.getElementById('ai-provider').value = data.aiConfig.provider;
+                    updateModelOptions(data.aiConfig.model);
+                }
             }
         }
 
@@ -1010,10 +1085,14 @@
         function appendMessage(msg) {
             const container = document.getElementById('chat-messages');
             const div = document.createElement('div');
-            div.className = `flex ${msg.from_me || msg.fromMe ? 'justify-end' : 'justify-start'} animate-fade-in`;
+            const isMe = msg.from_me || msg.fromMe;
+            const time = msg.timestamp ? new Date(msg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+
+            div.className = `flex ${isMe ? 'justify-end' : 'justify-start'} animate-fade-in relative mb-2 px-4`;
             div.innerHTML = `
-                <div class="max-w-[75%] px-5 py-3 ${msg.from_me || msg.fromMe ? 'chat-bubble-me' : 'chat-bubble-them'} text-sm leading-relaxed">
-                    ${msg.text}
+                <div class="max-w-[70%] px-3 py-2 ${isMe ? 'chat-bubble-me' : 'chat-bubble-them'} text-sm leading-relaxed min-w-[80px]">
+                    <div class="pr-8">${msg.text}</div>
+                    <span class="chat-timestamp">${time} ${isMe ? '<i class="fas fa-check-double text-[#53bdeb] ml-1"></i>' : ''}</span>
                 </div>
             `;
             container.appendChild(div);
@@ -1063,6 +1142,45 @@
             }
         }
 
+        const aiModels = {
+            openai: [
+                { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo (Económico)' },
+                { id: 'gpt-4o', name: 'GPT-4o (Omni - Recomendado)' },
+                { id: 'gpt-4o-mini', name: 'GPT-4o Mini (Veloz)' }
+            ],
+            anthropic: [
+                { id: 'claude-3-haiku-20240307', name: 'Claude 3 Haiku (Más Rápido)' },
+                { id: 'claude-3-5-sonnet-20240620', name: 'Claude 3.5 Sonnet (Inteligente)' },
+                { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus (Potente)' }
+            ],
+            gemini: [
+                { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash (Ultrarrápido)' },
+                { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro (Razonamiento)' }
+            ],
+            openrouter: [
+                { id: 'google/gemini-2.0-flash-exp:free', name: 'Gemini 2.0 Flash (Libre)' },
+                { id: 'meta-llama/llama-3.1-8b-instruct:free', name: 'Llama 3.1 8B (Libre)' },
+                { id: 'gryphe/mythomax-l2-13b', name: 'MythoMax 13B (Rol)' }
+            ]
+        };
+
+        function updateModelOptions(savedModel = null) {
+            const provider = document.getElementById('ai-provider').value;
+            const modelSelect = document.getElementById('ai-model');
+            modelSelect.innerHTML = '';
+
+            if (aiModels[provider]) {
+                aiModels[provider].forEach(m => {
+                    const opt = new Option(m.name, m.id);
+                    modelSelect.add(opt);
+                });
+            }
+
+            if (savedModel) {
+                modelSelect.value = savedModel;
+            }
+        }
+
         async function disconnectWhatsApp() {
             if (!confirm('¿Estás seguro de que deseas desconectar este dispositivo de LuxApp?')) return;
 
@@ -1077,14 +1195,15 @@
                 enabled: document.getElementById('ai-toggle').checked,
                 prompt: document.getElementById('ai-prompt').value,
                 apiKey: document.getElementById('ai-key').value,
-                provider: document.getElementById('ai-provider').value
+                provider: document.getElementById('ai-provider').value,
+                model: document.getElementById('ai-model').value
             };
             await apiFetch('/api/ai/config', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(config)
             });
-            if (showNotif) alert("✅ Configuración guardada exitosamente con el proveedor seleccionado.");
+            if (showNotif) alert("✅ Configuración guardada exitosamente con el proveedor y modelo seleccionados.");
             loadCreds();
         }
 
