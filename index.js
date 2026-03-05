@@ -12,6 +12,8 @@ const fs = require('fs');
 const { OpenAI } = require('openai');
 const Anthropic = require('@anthropic-ai/sdk');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { createClient } = require('@supabase/supabase-js');
+
 
 const app = express();
 const server = http.createServer(app);
@@ -25,6 +27,12 @@ const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
 });
+
+// --- CONFIGURACIÓN SUPABASE ---
+const supabaseUrl = process.env.SUPABASE_URL || 'https://tu-proyecto.supabase.co';
+const supabaseKey = process.env.SUPABASE_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
+
 
 // Middleware de Validación API
 function validateAPI(req, res, next) {

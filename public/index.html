@@ -82,6 +82,211 @@
                 transform: translateY(0);
             }
         }
+
+        /* --- NUEVOS ESTILOS DE AUTENTICACION --- */
+        .container-auth {
+            background-color: #fff;
+            border-radius: 40px;
+            box-shadow: 0 14px 28px rgba(0, 0, 0, 0.25), 0 10px 10px rgba(0, 0, 0, 0.22);
+            position: relative;
+            overflow: hidden;
+            width: 900px;
+            max-width: 100%;
+            min-height: 600px;
+        }
+
+        .form-container {
+            position: absolute;
+            top: 0;
+            height: 100%;
+            transition: all 0.6s ease-in-out;
+        }
+
+        .sign-in-container {
+            left: 0;
+            width: 50%;
+            z-index: 2;
+        }
+
+        .container-auth.right-panel-active .sign-in-container {
+            transform: translateX(100%);
+        }
+
+        .sign-up-container {
+            left: 0;
+            width: 50%;
+            opacity: 0;
+            z-index: 1;
+        }
+
+        .container-auth.right-panel-active .sign-up-container {
+            transform: translateX(100%);
+            opacity: 1;
+            z-index: 5;
+            animation: show 0.6s;
+        }
+
+        @keyframes show {
+
+            0%,
+            49.99% {
+                opacity: 0;
+                z-index: 1;
+            }
+
+            50%,
+            100% {
+                opacity: 1;
+                z-index: 5;
+            }
+        }
+
+        .overlay-container {
+            position: absolute;
+            top: 0;
+            left: 50%;
+            width: 50%;
+            height: 100%;
+            overflow: hidden;
+            transition: transform 0.6s ease-in-out;
+            z-index: 100;
+        }
+
+        .container-auth.right-panel-active .overlay-container {
+            transform: translateX(-100%);
+        }
+
+        .overlay {
+            background: #34495e;
+            background: linear-gradient(to right, #2c3e50, #34495e);
+            background-repeat: no-repeat;
+            background-size: cover;
+            background-position: 0 0;
+            color: #FFFFFF;
+            position: relative;
+            left: -100%;
+            height: 100%;
+            width: 200%;
+            transform: translateX(0);
+            transition: transform 0.6s ease-in-out;
+        }
+
+        .container-auth.right-panel-active .overlay {
+            transform: translateX(50%);
+        }
+
+        .overlay-panel {
+            position: absolute;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            padding: 0 40px;
+            text-align: center;
+            top: 0;
+            height: 100%;
+            width: 50%;
+            transform: translateX(0);
+            transition: transform 0.6s ease-in-out;
+        }
+
+        .overlay-left {
+            transform: translateX(-20%);
+        }
+
+        .container-auth.right-panel-active .overlay-left {
+            transform: translateX(0);
+        }
+
+        .overlay-right {
+            right: 0;
+            transform: translateX(0);
+        }
+
+        .container-auth.right-panel-active .overlay-right {
+            transform: translateX(20%);
+        }
+
+        .form-container form {
+            background-color: #FFFFFF;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            padding: 0 50px;
+            height: 100%;
+            text-align: center;
+        }
+
+        .form-container input {
+            background-color: #f1f5f9;
+            border: none;
+            padding: 12px 15px;
+            margin: 8px 0;
+            width: 100%;
+            border-radius: 12px;
+            font-size: 14px;
+            color: #1e293b;
+            outline: none;
+            border: 1px solid transparent;
+            transition: all 0.3s;
+        }
+
+        .form-container input:focus {
+            background-color: #fff;
+            border-color: #6366f1;
+            box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
+        }
+
+        .auth-btn {
+            border-radius: 20px;
+            border: 1px solid #6366f1;
+            background-color: #6366f1;
+            color: #FFFFFF;
+            font-size: 12px;
+            font-weight: bold;
+            padding: 12px 45px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            transition: transform 80ms ease-in;
+            cursor: pointer;
+        }
+
+        .auth-btn:active {
+            transform: scale(0.95);
+        }
+
+        .auth-btn:focus {
+            outline: none;
+        }
+
+        .auth-btn.ghost {
+            background-color: transparent;
+            border-color: #FFFFFF;
+        }
+
+        .social-container {
+            margin: 20px 0;
+        }
+
+        .social-container a {
+            border: 1px solid #ddd;
+            border-radius: 50%;
+            display: inline-flex;
+            justify-content: center;
+            align-items: center;
+            margin: 0 5px;
+            height: 40px;
+            width: 40px;
+            color: #333;
+            transition: all 0.3s;
+        }
+
+        .social-container a:hover {
+            background-color: #f8fafc;
+            border-color: #6366f1;
+            color: #6366f1;
+        }
     </style>
 </head>
 
@@ -90,86 +295,63 @@
     <!-- AUTH OVERLAY -->
     <div id="auth-overlay"
         class="fixed inset-0 z-50 flex items-center justify-center bg-[#020617] bg-opacity-95 backdrop-blur-[10px] hidden transition-opacity duration-300">
-        <div
-            class="glass-card w-full max-w-md p-10 rounded-[2.5rem] shadow-2xl border border-white/10 relative overflow-hidden">
-            <div class="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 blur-[100px] rounded-full -mr-32 -mt-32">
+
+        <div class="container-auth" id="main-auth">
+            <!-- SIGN UP PANEL -->
+            <div class="form-container sign-up-container">
+                <form onsubmit="event.preventDefault()">
+                    <h1 class="text-2xl font-black mb-4 text-slate-800">Crear Cuenta</h1>
+                    <div class="social-container mb-4">
+                        <a href="#" class="social"><i class="fab fa-facebook-f"></i></a>
+                        <a href="#" class="social"><i class="fab fa-google"></i></a>
+                        <a href="#" class="social"><i class="fab fa-tiktok"></i></a>
+                    </div>
+                    <span class="text-xs text-slate-500 mb-2">o usa tu correo para registrarte</span>
+                    <input type="text" id="reg-user" placeholder="Usuario" />
+                    <input type="password" id="reg-pass" placeholder="Contraseña"
+                        onkeypress="if(event.key === 'Enter') doRegister()" />
+
+                    <button onclick="doRegister()" class="auth-btn">Registrar</button>
+                </form>
             </div>
 
-            <div class="text-center mb-8 relative">
-                <h1 class="text-3xl font-extrabold text-white tracking-tighter italic">LUX<span
-                        class="text-indigo-500">APP</span></h1>
-                <p class="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-2" id="auth-subtitle">Acceso
-                    al Sistema</p>
+            <!-- SIGN IN PANEL -->
+            <div class="form-container sign-in-container">
+                <form onsubmit="event.preventDefault()">
+                    <h1 class="text-2xl font-black mb-4 text-slate-800">Iniciar Sesión</h1>
+                    <div class="social-container mb-4">
+                        <a href="#" class="social"><i class="fab fa-facebook-f"></i></a>
+                        <a href="#" class="social"><i class="fab fa-google"></i></a>
+                        <a href="#" class="social"><i class="fab fa-tiktok"></i></a>
+                    </div>
+                    <span class="text-xs text-slate-500 mb-2">o usa tu cuenta</span>
+                    <input type="text" id="login-user" placeholder="Usuario" />
+                    <input type="password" id="login-pass" placeholder="Contraseña"
+                        onkeypress="if(event.key === 'Enter') doLogin()" />
+
+                    <a href="#" class="text-xs text-slate-400 mt-2 hover:text-indigo-500">¿Olvidaste tu contraseña?</a>
+                    <button onclick="doLogin()" class="auth-btn mt-4">Entrar</button>
+                </form>
             </div>
 
-            <div id="login-form">
-                <div class="space-y-5 relative">
-                    <div>
-                        <label
-                            class="text-[10px] font-extrabold text-slate-500 uppercase tracking-[0.2em] block mb-2">Usuario</label>
-                        <div class="relative">
-                            <i class="fas fa-user absolute left-4 top-1/2 -translate-y-1/2 text-slate-600"></i>
-                            <input type="text" id="login-user"
-                                class="w-full bg-slate-950/50 border border-white/10 p-4 pl-12 rounded-2xl text-white outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all"
-                                placeholder="admin">
-                        </div>
+            <!-- OVERLAY -->
+            <div class="overlay-container">
+                <div class="overlay">
+                    <div class="overlay-panel overlay-left">
+                        <h1 class="text-3xl font-black text-white mb-4">¡Hola de nuevo!</h1>
+                        <p class="text-sm mb-8">Si ya tienes una cuenta, inicia sesión aquí para continuar.</p>
+                        <button class="ghost auth-btn" id="signInBtn">Ir al Login</button>
                     </div>
-                    <div>
-                        <label
-                            class="text-[10px] font-extrabold text-slate-500 uppercase tracking-[0.2em] block mb-2">Contraseña</label>
-                        <div class="relative">
-                            <i class="fas fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-600"></i>
-                            <input type="password" id="login-pass"
-                                class="w-full bg-slate-950/50 border border-white/10 p-4 pl-12 rounded-2xl text-white outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all"
-                                placeholder="••••••••" onkeypress="if(event.key === 'Enter') doLogin()">
-                        </div>
+                    <div class="overlay-panel overlay-right">
+                        <h1 class="text-3xl font-black text-white mb-4">¿Eres nuevo?</h1>
+                        <p class="text-sm mb-8">Regístrate y comienza a gestionar tus chats con IA.</p>
+                        <button class="ghost auth-btn" id="signUpBtn">Crear Cuenta</button>
                     </div>
-                    <button onclick="doLogin()"
-                        class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-4 rounded-2xl transition-all uppercase text-xs tracking-[0.2em] shadow-xl shadow-indigo-500/20 active:scale-[0.98] mt-2">
-                        Iniciar Sesión
-                    </button>
-                    <p class="text-center text-xs text-slate-400 mt-4">
-                        ¿No tienes cuenta? <a href="#" onclick="toggleAuth('register')"
-                            class="text-indigo-400 font-bold hover:text-indigo-300">Regístrate</a>
-                    </p>
-                </div>
-            </div>
-
-            <div id="register-form" class="hidden">
-                <div class="space-y-5 relative">
-                    <div>
-                        <label
-                            class="text-[10px] font-extrabold text-slate-500 uppercase tracking-[0.2em] block mb-2">Nuevo
-                            Usuario</label>
-                        <div class="relative">
-                            <i class="fas fa-user-plus absolute left-4 top-1/2 -translate-y-1/2 text-slate-600"></i>
-                            <input type="text" id="reg-user"
-                                class="w-full bg-slate-950/50 border border-white/10 p-4 pl-12 rounded-2xl text-white outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all"
-                                placeholder="nuevo_usuario">
-                        </div>
-                    </div>
-                    <div>
-                        <label
-                            class="text-[10px] font-extrabold text-slate-500 uppercase tracking-[0.2em] block mb-2">Contraseña</label>
-                        <div class="relative">
-                            <i class="fas fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-600"></i>
-                            <input type="password" id="reg-pass"
-                                class="w-full bg-slate-950/50 border border-white/10 p-4 pl-12 rounded-2xl text-white outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all"
-                                placeholder="••••••••" onkeypress="if(event.key === 'Enter') doRegister()">
-                        </div>
-                    </div>
-                    <button onclick="doRegister()"
-                        class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl transition-all uppercase text-xs tracking-[0.2em] shadow-xl shadow-emerald-500/20 active:scale-[0.98] mt-2">
-                        Crear Cuenta
-                    </button>
-                    <p class="text-center text-xs text-slate-400 mt-4">
-                        ¿Ya tienes cuenta? <a href="#" onclick="toggleAuth('login')"
-                            class="text-emerald-400 font-bold hover:text-emerald-300">Inicia Sesión</a>
-                    </p>
                 </div>
             </div>
         </div>
     </div>
+
 
     <!-- SIDEBAR -->
     <aside class="w-64 border-r border-slate-800 flex flex-col">
@@ -573,15 +755,23 @@
 
         let API_KEY = localStorage.getItem('lux_token') || "";
 
+        const signUpButton = document.getElementById('signUpBtn');
+        const signInButton = document.getElementById('signInBtn');
+        const containerAuth = document.getElementById('main-auth');
+
+        signUpButton.addEventListener('click', () => {
+            containerAuth.classList.add("right-panel-active");
+        });
+
+        signInButton.addEventListener('click', () => {
+            containerAuth.classList.remove("right-panel-active");
+        });
+
         function toggleAuth(mode) {
             if (mode === 'register') {
-                document.getElementById('login-form').classList.add('hidden');
-                document.getElementById('register-form').classList.remove('hidden');
-                document.getElementById('auth-subtitle').innerText = "Crear Nueva Cuenta";
+                containerAuth.classList.add("right-panel-active");
             } else {
-                document.getElementById('register-form').classList.add('hidden');
-                document.getElementById('login-form').classList.remove('hidden');
-                document.getElementById('auth-subtitle').innerText = "Acceso al Sistema";
+                containerAuth.classList.remove("right-panel-active");
             }
         }
 
