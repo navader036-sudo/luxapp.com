@@ -50,13 +50,17 @@ async function initDB() {
 
         await pool.query(`ALTER TABLE ai_config ADD COLUMN IF NOT EXISTS provider TEXT DEFAULT 'openai'`);
         await pool.query(`ALTER TABLE ai_config ADD COLUMN IF NOT EXISTS model TEXT DEFAULT ''`);
+        await pool.query(`ALTER TABLE ai_config ADD COLUMN IF NOT EXISTS base_url TEXT DEFAULT ''`);
         console.log('✅ Columnas ai_config actualizadas.');
 
         await pool.query(`CREATE TABLE IF NOT EXISTS wh_chats (jid TEXT PRIMARY KEY, name TEXT, last_message TEXT, last_timestamp INTEGER)`);
+        await pool.query(`ALTER TABLE wh_chats ADD COLUMN IF NOT EXISTS ai_active BOOLEAN DEFAULT true`);
         console.log('✅ Tabla wh_chats lista.');
 
         await pool.query(`CREATE TABLE IF NOT EXISTS wh_messages (id SERIAL PRIMARY KEY, msg_id TEXT UNIQUE, jid TEXT, from_me BOOLEAN, text TEXT, timestamp INTEGER)`);
         console.log('✅ Tabla wh_messages lista.');
+        await pool.query(`CREATE TABLE IF NOT EXISTS ai_keys (provider TEXT PRIMARY KEY, api_key TEXT, base_url TEXT)`);
+        console.log('✅ Tabla ai_keys lista (Bóveda de llaves).');
 
         console.log('✅ Base de datos inicializada completamente.');
 
@@ -66,7 +70,7 @@ async function initDB() {
             await pool.query('INSERT INTO ai_config (enabled, provider) VALUES (false, $1)', ['openai']);
         } else {
             aiConfig = res.rows[0];
-            initProviderClient(aiConfig.provider, aiConfig.api_key);
+            initProviderClient(aiConfig.provider, aiConfig.api_key, aiConfig.base_url);
         }
 
     } catch (err) {
@@ -83,14 +87,15 @@ let aiConfig = {
     prompt: "Eres un asistente virtual de Luxapp. Responde de manera profesional y amable.",
     api_key: "",
     provider: "openai",
-    model: ""
+    model: "",
+    base_url: ""
 };
 
 let openai = null;
 let anthropic = null;
 let gemini = null;
 
-function initProviderClient(provider, apiKey) {
+function initProviderClient(provider, apiKey, baseUrl = null) {
     if (!apiKey) return;
     try {
         if (provider === 'openai') {
@@ -103,7 +108,25 @@ function initProviderClient(provider, apiKey) {
             openai = new OpenAI({
                 baseURL: "https://openrouter.ai/api/v1",
                 apiKey: apiKey,
+                defaultHeaders: {
+                    "HTTP-Referer": "https://luxapp.io",
+                    "X-Title": "LuxApp",
+                }
             });
+        } else if (provider === 'xai') {
+            openai = new OpenAI({ baseURL: "https://api.x.ai/v1", apiKey });
+        } else if (provider === 'custom') {
+            openai = new OpenAI({ baseURL: baseUrl || "https://api.openai.com/v1", apiKey });
+        } else if (provider === 'groq') {
+            openai = new OpenAI({ baseURL: "https://api.groq.com/openai/v1", apiKey });
+        } else if (provider === 'mistral') {
+            openai = new OpenAI({ baseURL: "https://api.mistral.ai/v1", apiKey });
+        } else if (provider === 'deepseek') {
+            openai = new OpenAI({ baseURL: "https://api.deepseek.com", apiKey });
+        } else if (provider === 'perplexity') {
+            openai = new OpenAI({ baseURL: "https://api.perplexity.ai", apiKey });
+        } else if (provider === 'ollama') {
+            openai = new OpenAI({ baseURL: "http://localhost:11434/v1", apiKey: "ollama" });
         }
     } catch (err) {
         console.error(`Error inicializando proveedor ${provider}:`, err);
@@ -111,6 +134,8 @@ function initProviderClient(provider, apiKey) {
 }
 
 console.log('--- Configuración inicializada ---');
+
+let store;
 
 async function connectToWhatsApp() {
     if (sock) {
@@ -145,10 +170,26 @@ async function connectToWhatsApp() {
         }
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            const reason = lastDisconnect?.error?.message;
+            console.log(`❌ Conexión cerrada. Código: ${statusCode} | Motivo: ${reason}`);
+
+            // Si el código es 401 (desautorizado) o loggedOut, la sesión murió
+            const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401;
+            const shouldReconnect = !isLoggedOut;
+
             io.emit('status', { connected: false });
+
             if (shouldReconnect) {
+                console.log('🔄 Reconectando en 5 segundos...');
                 setTimeout(() => connectToWhatsApp(), statusCode === 440 ? 10000 : 5000);
+            } else {
+                console.log('🗑️ Sesión invalidada o teléfono desconectado (Código ' + statusCode + '). Borrando auth_luxapp y generando nuevo QR...');
+                try {
+                    fs.rmSync('./auth_luxapp', { recursive: true, force: true });
+                } catch (err) {
+                    console.error('Error al borrar carpeta auth_luxapp:', err.message);
+                }
+                setTimeout(() => connectToWhatsApp(), 2000);
             }
         }
     });
@@ -192,8 +233,24 @@ async function connectToWhatsApp() {
 
             if (aiConfig.enabled && !fromMe && !jid.includes('@g.us') && !isMe) {
                 if (text && text !== "Multimedia/Otro") {
-                    console.log(`[AI] Procesando respuesta para ${jid}...`);
-                    await handleAIResponse(jid, text, pushName);
+                    // Verificar si el chat tiene la IA habilitada o si un humano lo "tomó"
+                    try {
+                        const chatRes = await pool.query('SELECT ai_active FROM wh_chats WHERE jid = $1', [jid]);
+                        let isAiActive = true;
+                        if (chatRes.rows.length > 0) {
+                            // Por si acaso es NULL, asume true
+                            isAiActive = chatRes.rows[0].ai_active !== false;
+                        }
+
+                        if (isAiActive) {
+                            console.log(`[AI] Procesando respuesta para ${jid}...`);
+                            await handleAIResponse(jid, text, pushName);
+                        } else {
+                            console.log(`[AI] Ignorando (Humano atendiendo) para ${jid}`);
+                        }
+                    } catch (e) {
+                        console.error("Error verificando AI state:", e.message);
+                    }
                 }
             }
         } catch (err) {
@@ -204,21 +261,69 @@ async function connectToWhatsApp() {
     // Sincronización de historial
     sock.ev.on('messaging-history.set', async ({ chats, messages }) => {
         console.log(`[SYNC] Recibidos ${chats.length} chats y ${messages.length} mensajes.`);
+
+        // Wait for DB to be completely ready
+        if (!pool) return console.log('[SYNC] Pool no inicializado.');
+
+        let validChatsSynced = 0;
         for (const chat of chats) {
-            const lastMsg = messages.filter(m => m.key.remoteJid === chat.id).sort((a, b) => b.messageTimestamp - a.messageTimestamp)[0];
-            const text = lastMsg ? (lastMsg.message?.conversation || lastMsg.message?.extendedTextMessage?.text || "Historial") : "";
-            const ts = lastMsg ? lastMsg.messageTimestamp : Math.floor(Date.now() / 1000);
-            await pool.query(`
-                INSERT INTO wh_chats (jid, name, last_message, last_timestamp)
-                VALUES ($1, $2, $3, $4)
-                ON CONFLICT (jid) DO UPDATE SET last_message = EXCLUDED.last_message, last_timestamp = EXCLUDED.last_timestamp
-            `, [chat.id, chat.name || chat.id.split('@')[0], text, ts]);
+            try {
+                // Filtrar solo chats individuales y no el log interno de Baileys
+                if (chat.id && !chat.id.includes('@g.us') && !chat.id.includes('broadcast') && !chat.id.includes('@newsletter') && !chat.id.includes('@lid')) {
+                    const lastMsg = messages.filter(m => m.key.remoteJid === chat.id).sort((a, b) => {
+                        let ta = typeof a.messageTimestamp === 'object' ? a.messageTimestamp.low : a.messageTimestamp;
+                        let tb = typeof b.messageTimestamp === 'object' ? b.messageTimestamp.low : b.messageTimestamp;
+                        return (tb || 0) - (ta || 0);
+                    })[0];
+
+                    const text = lastMsg ? (lastMsg.message?.conversation || lastMsg.message?.extendedTextMessage?.text || "Chat") : "Chat";
+                    const tsRaw = lastMsg ? lastMsg.messageTimestamp : Math.floor(Date.now() / 1000);
+                    const ts = typeof tsRaw === 'object' ? tsRaw.low : tsRaw;
+
+                    const name = chat.name || chat.id.split('@')[0];
+
+                    await pool.query(`
+                        INSERT INTO wh_chats (jid, name, last_message, last_timestamp)
+                        VALUES ($1, $2, $3, $4)
+                        ON CONFLICT (jid) DO UPDATE SET 
+                            name = EXCLUDED.name,
+                            last_message = EXCLUDED.last_message, 
+                            last_timestamp = EXCLUDED.last_timestamp
+                    `, [chat.id, name, text, ts]);
+                    validChatsSynced++;
+                }
+            } catch (e) {
+                console.error("Error cargando chat del historial:", chat.id, e.message);
+            }
+        }
+        console.log(`[SYNC] Guardados ${validChatsSynced} chats válidos de forma asíncrona.`);
+    });
+
+    sock.ev.on('chats.upsert', async (newChats) => {
+        for (const chat of newChats) {
+            try {
+                await pool.query(`
+                    INSERT INTO wh_chats (jid, name, last_message, last_timestamp)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (jid) DO UPDATE SET name = EXCLUDED.name
+                `, [chat.id, chat.name || chat.id.split('@')[0], "Nuevo chat", Math.floor(Date.now() / 1000)]);
+            } catch (e) { }
+        }
+    });
+
+    sock.ev.on('chats.update', async (updates) => {
+        for (const update of updates) {
+            if (update.name) {
+                await pool.query('UPDATE wh_chats SET name = $1 WHERE jid = $2', [update.name, update.id]);
+            }
         }
     });
 }
 
 async function saveMessage(jid, name, fromMe, text, msgId, timestamp) {
     try {
+        const ts = typeof timestamp === 'object' && timestamp !== null ? timestamp.low : timestamp;
+
         // Upsert chat
         await pool.query(`
             INSERT INTO wh_chats (jid, name, last_message, last_timestamp)
@@ -227,14 +332,14 @@ async function saveMessage(jid, name, fromMe, text, msgId, timestamp) {
                 name = EXCLUDED.name,
                 last_message = EXCLUDED.last_message,
                 last_timestamp = EXCLUDED.last_timestamp
-        `, [jid, name, text, timestamp]);
+        `, [jid, name, text, ts]);
 
         // Insert message
         await pool.query(`
             INSERT INTO wh_messages (msg_id, jid, from_me, text, timestamp)
             VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (msg_id) DO NOTHING
-        `, [msgId, jid, fromMe, text, timestamp]);
+        `, [msgId, jid, fromMe, text, ts]);
     } catch (e) {
         console.error("Error guardando mensaje:", e.message);
     }
@@ -244,25 +349,45 @@ async function getProviderResponse(provider, userText, systemPrompt, history = [
     const selectedModel = aiConfig.model || (provider === 'openai' ? 'gpt-3.5-turbo' :
         provider === 'anthropic' ? 'claude-3-haiku-20240307' :
             provider === 'gemini' ? 'gemini-1.5-flash' :
-                provider === 'openrouter' ? 'google/gemini-2.0-flash-exp:free' : '');
+                provider === 'openrouter' ? 'google/gemini-2.0-flash-exp:free' :
+                    provider === 'custom' ? 'gpt-3.5-turbo' :
+                        provider === 'groq' ? 'llama-3.1-70b-versatile' :
+                            provider === 'mistral' ? 'mistral-large-latest' :
+                                provider === 'deepseek' ? 'deepseek-chat' :
+                                    provider === 'perplexity' ? 'llama-3.1-sonar-small-128k-online' :
+                                        provider === 'ollama' ? 'llama3' : '');
+
+    const openAiProviders = ['openai', 'openrouter', 'custom', 'groq', 'mistral', 'deepseek', 'perplexity', 'ollama', 'xai'];
+
+    const strictRules = `\n\nREGLAS ESTRICTAS OBLIGATORIAS:\n1. Eres un asistente respondiendo por WhatsApp. Tus respuestas DEBEN ser breves, directas y concisas.\n2. NO envíes largos bloques de texto ni múltiples opciones a menos que se te pida explícitamente.\n3. NO inventes conversaciones simuladas, NO uses timestamps (ej: [11:53 a.m.]), y NUNCA escribas respuestas en nombre del cliente.\n4. Limítate a responder exactamente a lo que se te pregunta con naturalidad.\n5. RESPONDE EXACTAMENTE EN EL MISMO IDIOMA en el que te escribe el cliente (Por defecto Español). NO mezcles ni cambies de idioma a menos que el cliente te hable en otro idioma.`;
+
+    const finalSystemPrompt = systemPrompt + strictRules;
 
     const messages = [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: finalSystemPrompt },
         ...history,
         { role: "user", content: userText }
     ];
 
-    if ((provider === 'openai' || provider === 'openrouter') && openai) {
+    let finalModel = selectedModel;
+    // Limpieza de prefijos si no es OpenRouter
+    if (provider !== 'openrouter' && finalModel.includes('/')) {
+        finalModel = finalModel.split('/').pop();
+    }
+
+    if (openAiProviders.includes(provider) && openai) {
         const chatCompletion = await openai.chat.completions.create({
             messages: messages,
-            model: selectedModel,
+            model: finalModel,
+            temperature: 0.5,
+            max_tokens: 800, // Respuestas más cortas para evitar locuras
         });
         return chatCompletion.choices[0].message.content;
     } else if (provider === 'anthropic' && anthropic) {
         // Anthropic usa un formato diferente para el sistema
         const msg = await anthropic.messages.create({
-            model: selectedModel,
-            max_tokens: 1024,
+            model: finalModel,
+            max_tokens: 2048,
             system: systemPrompt,
             messages: [
                 ...history,
@@ -271,15 +396,30 @@ async function getProviderResponse(provider, userText, systemPrompt, history = [
         });
         return msg.content[0].text;
     } else if (provider === 'gemini' && gemini) {
-        const model = gemini.getGenerativeModel({
-            model: selectedModel,
-            systemInstruction: systemPrompt
-        });
-        // Gemini maneja historial de forma distinta, pero simplificamos inyectando en el prompt
-        // o usando su chat sessions si fuera necesario. Por ahora unificamos el prompt.
-        const promptFull = history.map(m => `${m.role === 'user' ? 'Cliente' : 'Asistente'}: ${m.content}`).join('\n') + `\nCliente: ${userText}`;
-        const result = await model.generateContent(promptFull);
-        return result.response.text();
+        try {
+            // Limpiar nombre del modelo para Google (debe ser minúsculas y sin prefijos)
+            let geminiModel = finalModel.toLowerCase().trim();
+            if (geminiModel.includes('/')) geminiModel = geminiModel.split('/').pop();
+
+            const model = gemini.getGenerativeModel({
+                model: geminiModel,
+                systemInstruction: systemPrompt,
+                generationConfig: {
+                    maxOutputTokens: 2048,
+                    temperature: 0.7,
+                }
+            });
+            const promptFull = history.map(m => `${m.role === 'user' ? 'Cliente' : 'Asistente'}: ${m.content}`).join('\n') + `\nCliente: ${userText}\nAsistente: `;
+            const result = await model.generateContent(promptFull);
+            const response = await result.response;
+            return response.text();
+        } catch (geminiError) {
+            console.error("Error detallado de Gemini:", geminiError);
+            if (geminiError.message.includes("404") || geminiError.message.includes("not found")) {
+                throw new Error(`⚠️ BLOQUEO REGIONAL: El API directo de Google Gemini no está disponible en tu región (Venezuela). Por favor, usa este mismo modelo seleccionando el proveedor 'OpenRouter' para saltar el bloqueo.`);
+            }
+            throw geminiError;
+        }
     }
     throw new Error('Proveedor no soportado, mal configurado o sin API Key');
 }
@@ -290,7 +430,7 @@ async function handleAIResponse(jid, userText, name) {
         return;
     }
     if (!aiConfig.provider) aiConfig.provider = 'openai';
-    initProviderClient(aiConfig.provider, aiConfig.api_key);
+    initProviderClient(aiConfig.provider, aiConfig.api_key, aiConfig.base_url);
 
     try {
         // Obtener historial reciente para contexto
@@ -362,6 +502,21 @@ app.get('/api/instance/status', validateAPI, (req, res) => {
 
 app.get('/api/chats', validateAPI, async (req, res) => {
     try {
+        // Sincronización forzada desde el Store si está disponible (para rescatar chats que no están en DB)
+        if (store && store.chats) {
+            const allChats = store.chats.all();
+            console.log(`[STORE-SYNC] Sincronizando ${allChats.length} chats del almacén de memoria.`);
+            for (const chat of allChats) {
+                try {
+                    await pool.query(`
+                        INSERT INTO wh_chats (jid, name, last_message, last_timestamp)
+                        VALUES ($1, $2, $3, $4)
+                        ON CONFLICT (jid) DO UPDATE SET name = EXCLUDED.name
+                    `, [chat.id, chat.name || chat.id.split('@')[0], "Sincronizado", Math.floor(Date.now() / 1000)]);
+                } catch (e) { }
+            }
+        }
+
         const result = await pool.query('SELECT * FROM wh_chats ORDER BY last_timestamp DESC');
         res.json(result.rows);
     } catch (e) {
@@ -404,28 +559,54 @@ app.get('/api/creds', validateAPI, async (req, res) => {
             prompt: dbConfig.prompt,
             apiKey: dbConfig.api_key,
             provider: dbConfig.provider || 'openai',
-            model: dbConfig.model || ''
+            model: dbConfig.model || '',
+            baseUrl: dbConfig.base_url || ''
         }
     });
 });
 
+app.get('/api/ai/keys', validateAPI, async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM ai_keys');
+        const keys = {};
+        result.rows.forEach(r => {
+            keys[r.provider] = { apiKey: r.api_key, baseUrl: r.base_url };
+        });
+        res.json(keys);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 app.post('/api/ai/config', validateAPI, async (req, res) => {
-    const { enabled, prompt, apiKey, provider, model } = req.body;
+    const { enabled, prompt, apiKey, provider, model, baseUrl } = req.body;
     const finalProvider = provider || 'openai';
     const finalModel = model || '';
+    const finalBaseUrl = baseUrl || '';
     try {
+        // Actualizar configuración activa
         await pool.query(`
             UPDATE ai_config SET 
                 enabled = $1, 
                 prompt = $2, 
                 api_key = $3,
                 provider = $4,
-                model = $5
+                model = $5,
+                base_url = $6
             WHERE id = (SELECT id FROM ai_config LIMIT 1)
-        `, [enabled, prompt, apiKey, finalProvider, finalModel]);
+        `, [enabled, prompt, apiKey, finalProvider, finalModel, finalBaseUrl]);
 
-        aiConfig = { enabled, prompt, api_key: apiKey, provider: finalProvider, model: finalModel };
-        initProviderClient(finalProvider, apiKey);
+        // Guardar en la bóveda para este proveedor
+        if (apiKey) {
+            await pool.query(`
+                INSERT INTO ai_keys (provider, api_key, base_url)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (provider) DO UPDATE SET api_key = EXCLUDED.api_key, base_url = EXCLUDED.base_url
+            `, [finalProvider, apiKey, finalBaseUrl]);
+        }
+
+        aiConfig = { enabled, prompt, api_key: apiKey, provider: finalProvider, model: finalModel, base_url: finalBaseUrl };
+        initProviderClient(finalProvider, apiKey, finalBaseUrl);
 
         res.json({ status: "success", config: aiConfig });
     } catch (e) {
@@ -436,7 +617,7 @@ app.post('/api/ai/config', validateAPI, async (req, res) => {
 app.post('/api/ai/test', validateAPI, async (req, res) => {
     const { message } = req.body;
     if (!aiConfig.api_key) return res.status(400).json({ error: "API Key no configurada" });
-    initProviderClient(aiConfig.provider, aiConfig.api_key);
+    initProviderClient(aiConfig.provider, aiConfig.api_key, aiConfig.base_url);
 
     try {
         const aiText = await getProviderResponse(aiConfig.provider, message, aiConfig.prompt);
@@ -455,15 +636,31 @@ app.post('/api/instance/send', validateAPI, async (req, res) => {
         const sent = await sock.sendMessage(jid, { text: message });
 
         const ts = Math.floor(Date.now() / 1000);
+        const cleanTo = jid.split('@')[0];
         await saveMessage(jid, cleanTo, true, message, sent.key.id, ts);
+
+        // Si un humano responde, pausar la IA automáticamente
+        await pool.query('UPDATE wh_chats SET ai_active = false WHERE jid = $1', [jid]);
 
         io.emit('new_message', {
             jid,
             name: cleanTo,
-            message: { text: message, fromMe: true, timestamp: ts }
+            message: { text: message, fromMe: true, timestamp: ts },
+            ai_paused: true // para la UI
         });
 
         res.json({ status: "sent", jid });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Endpoint para alternar la IA manualmente
+app.post('/api/chats/:jid/toggle-ai', validateAPI, async (req, res) => {
+    try {
+        const { active } = req.body;
+        await pool.query('UPDATE wh_chats SET ai_active = $1 WHERE jid = $2', [active, req.params.jid]);
+        res.json({ success: true, ai_active: active });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
