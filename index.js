@@ -2,7 +2,7 @@ const crypto = require('crypto');
 if (!globalThis.crypto) {
     globalThis.crypto = crypto.webcrypto;
 }
-const { Pool } = require('pg');
+const { pool } = require('./database.js');
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
@@ -22,11 +22,6 @@ const io = new Server(server);
 app.use(express.json());
 app.use(express.static('public'));
 
-// --- CONFIGURACIÓN BASE DE DATOS ---
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
-});
 
 // --- CONFIGURACIÓN SUPABASE ---
 const supabaseUrl = process.env.SUPABASE_URL || 'https://tu-proyecto.supabase.co';
@@ -45,13 +40,8 @@ function validateAPI(req, res, next) {
 }
 
 async function initDB() {
-    if (!process.env.DATABASE_URL) {
-        console.error('❌ Error: La variable DATABASE_URL no está configurada en el archivo .env');
-        console.error('⚠️  Por favor, asegúrate de proporcionar una cadena de conexión válida (ej. postgres://user:pass@localhost:5432/db).');
-        throw new Error("DATABASE_URL no configurada");
-    }
-
     try {
+
         await pool.query(`CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, username TEXT UNIQUE, password TEXT)`);
         console.log('✅ Tabla users lista.');
 
@@ -490,8 +480,8 @@ app.post('/api/instance/logout', validateAPI, async (req, res) => {
     res.json({ status: "logged_out" });
 });
 
-server.listen(3000, async () => {
-    console.log("🚀 LUXAPP HELPDESK ENGINE RUNNING ON PORT 3000");
+server.listen(3010, async () => {
+    console.log("🚀 LUXAPP HELPDESK ENGINE RUNNING ON PORT 3010");
     await initDB();
     connectToWhatsApp();
 });
