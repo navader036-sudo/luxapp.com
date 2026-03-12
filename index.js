@@ -632,6 +632,10 @@ app.post('/api/login', async (req, res) => {
 
 // --- ENDPOINTS ---
 
+app.get('/health', (req, res) => {
+    res.json({ status: "up", timestamp: new Date().toISOString() });
+});
+
 app.get('/api/instance/status', validateAPI, (req, res) => {
     res.json({
         connected: !!sock?.user,
