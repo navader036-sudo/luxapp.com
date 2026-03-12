@@ -21,12 +21,28 @@ const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
         origin: "*",
-        methods: ["GET", "POST"]
+        methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allowedHeaders: ["Content-Type", "Authorization", "x-api-key"]
     }
 });
 
-app.use(cors());
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'Accept']
+}));
 app.use(express.json());
+
+// Middleware de Logs para Railway (Verás esto en el Dashboard de Railway)
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+});
+
+// Ruta raíz para verificar salud desde el navegador
+app.get('/', (req, res) => {
+    res.send('🚀 Luxapp Helpdesk Backend is Running! Port: ' + (process.env.PORT || 3010));
+});
 
 
 
@@ -633,7 +649,12 @@ app.post('/api/login', async (req, res) => {
 // --- ENDPOINTS ---
 
 app.get('/health', (req, res) => {
-    res.json({ status: "up", timestamp: new Date().toISOString() });
+    res.json({
+        status: "up",
+        whatsapp: !!sock?.user,
+        database: pool ? "connected" : "error",
+        timestamp: new Date().toISOString()
+    });
 });
 
 app.get('/api/instance/status', validateAPI, (req, res) => {
@@ -835,10 +856,23 @@ app.post('/api/instance/logout', validateAPI, async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3010;
-server.listen(PORT, async () => {
+server.listen(PORT, '0.0.0.0', async () => {
     console.log(`🚀 LUXAPP HELPDESK ENGINE RUNNING ON PORT ${PORT}`);
-    await initDB();
-    connectToWhatsApp();
+    try {
+        await initDB();
+        connectToWhatsApp();
+    } catch (e) {
+        console.error("❌ Falla crítica en el inicio:", e.message);
+    }
+});
+
+// Manejo global de errores para evitar que un error de red tumbe el servidor
+process.on('uncaughtException', (err) => {
+    console.error('❌ Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
 process.on('SIGINT', async () => {
