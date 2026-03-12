@@ -12,21 +12,24 @@ const fs = require('fs');
 const { OpenAI } = require('openai');
 const Anthropic = require('@anthropic-ai/sdk');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { createClient } = require('@supabase/supabase-js');
+const cors = require('cors');
+
 
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
 
+app.use(cors());
 app.use(express.json());
-app.use(express.static('public'));
 
 
-// --- CONFIGURACIÓN SUPABASE ---
-const supabaseUrl = process.env.SUPABASE_URL || 'https://tu-proyecto.supabase.co';
-const supabaseKey = process.env.SUPABASE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+
 
 
 // Middleware de Validación API
@@ -142,7 +145,28 @@ async function connectToWhatsApp() {
         try { sock.ws.close(); } catch (e) { }
     }
 
-    const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = await import('baileys');
+    const baileys = await import('baileys');
+    const makeWASocket = baileys.default;
+    const { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = baileys;
+
+    if (!global.contacts) {
+        global.contacts = {};
+        try {
+            if (fs.existsSync('./baileys_contacts.json')) {
+                global.contacts = JSON.parse(fs.readFileSync('./baileys_contacts.json', 'utf-8'));
+            }
+        } catch (e) {
+            console.error('Error cargando contactos:', e.message);
+        }
+    }
+
+    const saveContacts = () => {
+        try {
+            fs.writeFileSync('./baileys_contacts.json', JSON.stringify(global.contacts, null, 2));
+        } catch (e) {
+            console.error('Error guardando contactos:', e.message);
+        }
+    };
 
     const { state, saveCreds } = await useMultiFileAuthState('auth_luxapp');
     const { version } = await fetchLatestBaileysVersion();
@@ -157,6 +181,36 @@ async function connectToWhatsApp() {
 
     sock.ev.on('creds.update', saveCreds);
 
+    // Capturar contactos de varios eventos
+    sock.ev.on('contacts.upsert', (newContacts) => {
+        for (const contact of newContacts) {
+            if (contact.id) {
+                global.contacts[contact.id] = { ...(global.contacts[contact.id] || {}), ...contact };
+            }
+        }
+        saveContacts();
+    });
+
+    sock.ev.on('contacts.update', (updates) => {
+        for (const update of updates) {
+            if (update.id) {
+                global.contacts[update.id] = { ...(global.contacts[update.id] || {}), ...update };
+            }
+        }
+        saveContacts();
+    });
+
+    sock.ev.on('messaging-history.set', ({ contacts: newContacts }) => {
+        if (newContacts) {
+            for (const contact of newContacts) {
+                if (contact.id) {
+                    global.contacts[contact.id] = { ...(global.contacts[contact.id] || {}), ...contact };
+                }
+            }
+            saveContacts();
+        }
+    });
+
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
         if (qr) {
@@ -167,6 +221,8 @@ async function connectToWhatsApp() {
             qrBase64 = null;
             io.emit('status', { connected: true, user: sock.user.id.split(':')[0] });
             console.log('✅ Luxapp está conectado.');
+            // Intentar sincronizar nombres después de un momento para que el store cargue
+            setTimeout(() => syncContactsWithDB(), 5000);
         }
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
@@ -204,7 +260,20 @@ async function connectToWhatsApp() {
 
             const fromMe = msg.key.fromMe;
             const from = jid.split('@')[0];
-            const pushName = fromMe ? (sock.user?.name || 'Yo') : (msg.pushName || from);
+
+            // Buscar nombre en Almacén -> Mensaje -> DB -> Número
+            let pushName = fromMe ? (sock.user?.name || 'Yo') : msg.pushName;
+            if (!pushName || pushName === from) {
+                const contact = global.contacts[jid];
+                pushName = contact?.name || contact?.verifiedName || contact?.notify || pushName || from;
+            }
+            // Si sigue siendo solo el número, intentar buscar en DB previa
+            if (pushName === from) {
+                const existingChat = await pool.query('SELECT name FROM wh_chats WHERE jid = $1', [jid]);
+                if (existingChat.rows.length > 0 && existingChat.rows[0].name !== from) {
+                    pushName = existingChat.rows[0].name;
+                }
+            }
 
             // Mejorar extracción de texto
             let text = "";
@@ -278,18 +347,28 @@ async function connectToWhatsApp() {
 
                     const text = lastMsg ? (lastMsg.message?.conversation || lastMsg.message?.extendedTextMessage?.text || "Chat") : "Chat";
                     const tsRaw = lastMsg ? lastMsg.messageTimestamp : Math.floor(Date.now() / 1000);
-                    const ts = typeof tsRaw === 'object' ? tsRaw.low : tsRaw;
+                    let name = chat.name;
+                    const contact = global.contacts[chat.id];
+                    const discoveredName = contact?.name || contact?.verifiedName || contact?.notify;
 
-                    const name = chat.name || chat.id.split('@')[0];
+                    if (discoveredName) {
+                        name = discoveredName;
+                    } else if (!name || name === chat.id.split('@')[0]) {
+                        name = chat.id.split('@')[0];
+                    }
 
                     await pool.query(`
                         INSERT INTO wh_chats (jid, name, last_message, last_timestamp)
                         VALUES ($1, $2, $3, $4)
                         ON CONFLICT (jid) DO UPDATE SET 
-                            name = EXCLUDED.name,
+                            name = CASE 
+                                WHEN EXCLUDED.name ~ '^[0-9]+$' AND wh_chats.name !~ '^[0-9]+$' THEN wh_chats.name
+                                WHEN (wh_chats.name ~ '^[0-9]+$' OR wh_chats.name IS NULL OR wh_chats.name = '') AND EXCLUDED.name !~ '^[0-9]+$' THEN EXCLUDED.name
+                                ELSE EXCLUDED.name
+                            END,
                             last_message = EXCLUDED.last_message, 
                             last_timestamp = EXCLUDED.last_timestamp
-                    `, [chat.id, name, text, ts]);
+                    `, [chat.id, name, text, tsRaw]);
                     validChatsSynced++;
                 }
             } catch (e) {
@@ -299,14 +378,45 @@ async function connectToWhatsApp() {
         console.log(`[SYNC] Guardados ${validChatsSynced} chats válidos de forma asíncrona.`);
     });
 
+    sock.ev.on('contacts.upsert', async (contacts) => {
+        for (const contact of contacts) {
+            const name = contact.name || contact.verifiedName || contact.notify;
+            if (name && contact.id) {
+                try {
+                    await pool.query(`
+                        UPDATE wh_chats 
+                        SET name = $1 
+                        WHERE jid = $2 AND (name = split_part(jid, '@', 1) OR name IS NULL OR name = '')
+                    `, [name, contact.id]);
+                } catch (e) { }
+            }
+        }
+    });
+
+    sock.ev.on('contacts.update', async (updates) => {
+        for (const update of updates) {
+            const name = update.name || update.verifiedName;
+            if (name && update.id) {
+                try {
+                    await pool.query('UPDATE wh_chats SET name = $1 WHERE jid = $2', [name, update.id]);
+                } catch (e) { }
+            }
+        }
+    });
+
     sock.ev.on('chats.upsert', async (newChats) => {
         for (const chat of newChats) {
             try {
+                let name = chat.name;
+                if (!name || name === chat.id.split('@')[0]) {
+                    const contact = global.contacts[chat.id];
+                    name = contact?.name || contact?.verifiedName || contact?.notify || name || chat.id.split('@')[0];
+                }
                 await pool.query(`
                     INSERT INTO wh_chats (jid, name, last_message, last_timestamp)
                     VALUES ($1, $2, $3, $4)
-                    ON CONFLICT (jid) DO UPDATE SET name = EXCLUDED.name
-                `, [chat.id, chat.name || chat.id.split('@')[0], "Nuevo chat", Math.floor(Date.now() / 1000)]);
+                    ON CONFLICT (jid) DO UPDATE SET name = EXCLUDED.name WHERE wh_chats.name = wh_chats.jid OR EXCLUDED.name != wh_chats.jid
+                `, [chat.id, name, "Nuevo chat", Math.floor(Date.now() / 1000)]);
             } catch (e) { }
         }
     });
@@ -324,21 +434,28 @@ async function saveMessage(jid, name, fromMe, text, msgId, timestamp) {
     try {
         const ts = typeof timestamp === 'object' && timestamp !== null ? timestamp.low : timestamp;
 
-        // Upsert chat
+        // Upsert chat con protección contra nombres numéricos
+        // Si el nuevo nombre es numérico y ya tenemos un nombre no-numérico, mantenemos el antiguo.
+        // Si el nombre actual es numérico y el nuevo no lo es, actualizamos.
         await pool.query(`
             INSERT INTO wh_chats (jid, name, last_message, last_timestamp)
             VALUES ($1, $2, $3, $4)
             ON CONFLICT (jid) DO UPDATE SET 
-                name = EXCLUDED.name,
+                name = CASE 
+                    WHEN EXCLUDED.name ~ '^[0-9]+$' AND wh_chats.name !~ '^[0-9]+$' THEN wh_chats.name
+                    WHEN (wh_chats.name ~ '^[0-9]+$' OR wh_chats.name IS NULL OR wh_chats.name = '') AND EXCLUDED.name !~ '^[0-9]+$' THEN EXCLUDED.name
+                    WHEN EXCLUDED.name !~ '^[0-9]+$' THEN EXCLUDED.name
+                    ELSE wh_chats.name
+                END,
                 last_message = EXCLUDED.last_message,
                 last_timestamp = EXCLUDED.last_timestamp
         `, [jid, name, text, ts]);
 
         // Insert message
         await pool.query(`
-            INSERT INTO wh_messages (msg_id, jid, from_me, text, timestamp)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (msg_id) DO NOTHING
+            INSERT INTO wh_messages(msg_id, jid, from_me, text, timestamp)
+        VALUES($1, $2, $3, $4, $5)
+            ON CONFLICT(msg_id) DO NOTHING
         `, [msgId, jid, fromMe, text, ts]);
     } catch (e) {
         console.error("Error guardando mensaje:", e.message);
@@ -359,7 +476,7 @@ async function getProviderResponse(provider, userText, systemPrompt, history = [
 
     const openAiProviders = ['openai', 'openrouter', 'custom', 'groq', 'mistral', 'deepseek', 'perplexity', 'ollama', 'xai'];
 
-    const strictRules = `\n\nREGLAS ESTRICTAS OBLIGATORIAS:\n1. Eres un asistente respondiendo por WhatsApp. Tus respuestas DEBEN ser breves, directas y concisas.\n2. NO envíes largos bloques de texto ni múltiples opciones a menos que se te pida explícitamente.\n3. NO inventes conversaciones simuladas, NO uses timestamps (ej: [11:53 a.m.]), y NUNCA escribas respuestas en nombre del cliente.\n4. Limítate a responder exactamente a lo que se te pregunta con naturalidad.\n5. RESPONDE EXACTAMENTE EN EL MISMO IDIOMA en el que te escribe el cliente (Por defecto Español). NO mezcles ni cambies de idioma a menos que el cliente te hable en otro idioma.`;
+    const strictRules = `\n\nREGLAS ESTRICTAS OBLIGATORIAS: \n1.Eres un asistente respondiendo por WhatsApp.Tus respuestas DEBEN ser breves, directas y concisas.\n2.NO envíes largos bloques de texto ni múltiples opciones a menos que se te pida explícitamente.\n3.NO inventes conversaciones simuladas, NO uses timestamps(ej: [11: 53 a.m.]), y NUNCA escribas respuestas en nombre del cliente.\n4.Limítate a responder exactamente a lo que se te pregunta con naturalidad.\n5.RESPONDE EXACTAMENTE EN EL MISMO IDIOMA en el que te escribe el cliente(Por defecto Español).NO mezcles ni cambies de idioma a menos que el cliente te hable en otro idioma.`;
 
     const finalSystemPrompt = systemPrompt + strictRules;
 
@@ -409,19 +526,42 @@ async function getProviderResponse(provider, userText, systemPrompt, history = [
                     temperature: 0.7,
                 }
             });
-            const promptFull = history.map(m => `${m.role === 'user' ? 'Cliente' : 'Asistente'}: ${m.content}`).join('\n') + `\nCliente: ${userText}\nAsistente: `;
+            const promptFull = history.map(m => `${m.role === 'user' ? 'Cliente' : 'Asistente'}: ${m.content} `).join('\n') + `\nCliente: ${userText} \nAsistente: `;
             const result = await model.generateContent(promptFull);
             const response = await result.response;
             return response.text();
         } catch (geminiError) {
             console.error("Error detallado de Gemini:", geminiError);
             if (geminiError.message.includes("404") || geminiError.message.includes("not found")) {
-                throw new Error(`⚠️ BLOQUEO REGIONAL: El API directo de Google Gemini no está disponible en tu región (Venezuela). Por favor, usa este mismo modelo seleccionando el proveedor 'OpenRouter' para saltar el bloqueo.`);
+                throw new Error(`⚠️ BLOQUEO REGIONAL: El API directo de Google Gemini no está disponible en tu región(Venezuela).Por favor, usa este mismo modelo seleccionando el proveedor 'OpenRouter' para saltar el bloqueo.`);
             }
             throw geminiError;
         }
     }
     throw new Error('Proveedor no soportado, mal configurado o sin API Key');
+}
+
+async function syncContactsWithDB() {
+    if (!global.contacts || !pool) return;
+    try {
+        const chats = await pool.query("SELECT jid, name FROM wh_chats WHERE name ~ '^[0-9]+$' OR name IS NULL OR name = ''");
+        console.log(`[SYNC-NAMES] Revisando ${chats.rows.length} chats con nombres numéricos...`);
+        let updated = 0;
+        for (const chat of chats.rows) {
+            const contact = global.contacts[chat.jid];
+            const name = contact?.name || contact?.verifiedName || contact?.notify;
+            if (name && name !== chat.jid.split('@')[0]) {
+                await pool.query('UPDATE wh_chats SET name = $1 WHERE jid = $2', [name, chat.jid]);
+                updated++;
+            }
+        }
+        if (updated > 0) {
+            console.log(`[SYNC-NAMES] Se actualizaron ${updated} nombres de contactos.`);
+            io.emit('new_message', { jid: 'system', name: 'system', message: { text: 'Nombres actualizados', timestamp: Math.floor(Date.now() / 1000) } }); // Trigger refresh in frontend
+        }
+    } catch (e) {
+        console.error("[SYNC-NAMES] Error:", e.message);
+    }
 }
 
 async function handleAIResponse(jid, userText, name) {
@@ -441,7 +581,7 @@ async function handleAIResponse(jid, userText, name) {
         }));
 
         console.log(`[AI] Solicitando respuesta de ${aiConfig.provider} (${aiConfig.model || 'default'}) para ${jid}...`);
-        const personalizedPrompt = `${aiConfig.prompt}\n\nEstás hablando con: ${name}`;
+        const personalizedPrompt = `${aiConfig.prompt} \n\nEstás hablando con: ${name} `;
         const aiText = await getProviderResponse(aiConfig.provider, userText, personalizedPrompt, history);
 
         console.log(`[AI] Respuesta recibida: "${aiText.substring(0, 50)}..."`);
@@ -502,17 +642,19 @@ app.get('/api/instance/status', validateAPI, (req, res) => {
 
 app.get('/api/chats', validateAPI, async (req, res) => {
     try {
-        // Sincronización forzada desde el Store si está disponible (para rescatar chats que no están en DB)
-        if (store && store.chats) {
-            const allChats = store.chats.all();
-            console.log(`[STORE-SYNC] Sincronizando ${allChats.length} chats del almacén de memoria.`);
-            for (const chat of allChats) {
+        // Sincronización forzada desde el Almacén si está disponible (para rescatar chats que no están en DB)
+        if (global.contacts) {
+            const allJids = Object.keys(global.contacts);
+            console.log(`[STORE - SYNC] Sincronizando ${allJids.length} contactos del almacén de memoria.`);
+            for (const jid of allJids) {
+                const contact = global.contacts[jid];
+                const name = contact.name || contact.verifiedName || contact.notify || jid.split('@')[0];
                 try {
                     await pool.query(`
                         INSERT INTO wh_chats (jid, name, last_message, last_timestamp)
                         VALUES ($1, $2, $3, $4)
-                        ON CONFLICT (jid) DO UPDATE SET name = EXCLUDED.name
-                    `, [chat.id, chat.name || chat.id.split('@')[0], "Sincronizado", Math.floor(Date.now() / 1000)]);
+                        ON CONFLICT (jid) DO UPDATE SET name = EXCLUDED.name WHERE wh_chats.name ~ '^[0-9]+$' AND EXCLUDED.name !~ '^[0-9]+$'
+                    `, [jid, name, "Sincronizado", Math.floor(Date.now() / 1000)]);
                 } catch (e) { }
             }
         }
@@ -522,6 +664,17 @@ app.get('/api/chats', validateAPI, async (req, res) => {
     } catch (e) {
         console.error(e);
         res.status(500).json({ error: "Error al obtener chats" });
+    }
+});
+
+app.delete('/api/chats/:jid', validateAPI, async (req, res) => {
+    const { jid } = req.params;
+    try {
+        await pool.query('DELETE FROM wh_messages WHERE jid = $1', [jid]);
+        await pool.query('DELETE FROM wh_chats WHERE jid = $1', [jid]);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
     }
 });
 
@@ -677,8 +830,9 @@ app.post('/api/instance/logout', validateAPI, async (req, res) => {
     res.json({ status: "logged_out" });
 });
 
-server.listen(3010, async () => {
-    console.log("🚀 LUXAPP HELPDESK ENGINE RUNNING ON PORT 3010");
+const PORT = process.env.PORT || 3010;
+server.listen(PORT, async () => {
+    console.log(`🚀 LUXAPP HELPDESK ENGINE RUNNING ON PORT ${PORT}`);
     await initDB();
     connectToWhatsApp();
 });

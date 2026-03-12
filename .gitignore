@@ -1,2 +1,6 @@
 node_modules
 .env
+auth_luxapp
+*.log
+baileys_contacts.json
+baileys_store.json
