@@ -309,6 +309,32 @@ async function connectToWhatsApp() {
                 message: { text, fromMe, timestamp: msg.messageTimestamp }
             });
 
+            // Notificar a LuxCare (Webhook)
+            if (!fromMe && process.env.LUXCARE_WEBHOOK_URL) {
+                try {
+                    fetch(process.env.LUXCARE_WEBHOOK_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            object: 'whatsapp_business_account',
+                            entry: [{
+                                id: process.env.LUX_BUSINESS_ID || 'TU_BUSINESS_ID',
+                                changes: [{
+                                    value: {
+                                        messages: [{
+                                            from: from,
+                                            text: { body: text }
+                                        }]
+                                    }
+                                }]
+                            }]
+                        })
+                    }).catch(err => console.error("Error enviando a LuxCare Webhook:", err.message));
+                } catch (e) {
+                    console.error("Error al intentar notificar a LuxCare:", e.message);
+                }
+            }
+
             // IA (Solo para mensajes entrantes, chats no grupales y que no sean "Chat conmigo mismo")
             if (!sock.user) return;
             const myNumber = sock.user.id.split(':')[0].split('@')[0];
@@ -841,6 +867,50 @@ app.post('/api/chats/:jid/toggle-ai', validateAPI, async (req, res) => {
         res.json({ success: true, ai_active: active });
     } catch (e) {
         res.status(500).json({ error: e.message });
+    }
+});
+
+// --- LUXCARE INTEGRATION ENDPOINT ---
+app.post('/api/lux/send', async (req, res) => {
+    const apiKey = req.headers['x-api-key'];
+    const { to, message, external_id } = req.body;
+
+    // 1. Validar que la llave sea la correcta
+    const secretKey = process.env.LUXCARE_API_KEY || 'lux_secret_123';
+    if (apiKey !== secretKey) {
+        return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    if (!sock?.user) return res.status(503).json({ error: "WhatsApp no conectado" });
+
+    try {
+        const jid = to.includes('@') ? to : `${to.replace(/\D/g, '')}@s.whatsapp.net`;
+        const sent = await sock.sendMessage(jid, { text: message });
+
+        const ts = Math.floor(Date.now() / 1000);
+        const cleanTo = jid.split('@')[0];
+
+        // Guardar mensaje en DB
+        await saveMessage(jid, cleanTo, true, message, sent.key.id, ts);
+
+        // Si LuxCare envía un mensaje, pausar la IA para ese chat
+        await pool.query('UPDATE wh_chats SET ai_active = false WHERE jid = $1', [jid]);
+
+        io.emit('new_message', {
+            jid,
+            name: cleanTo,
+            message: { text: message, fromMe: true, timestamp: ts },
+            ai_paused: true
+        });
+
+        // Responder con el formato que espera LuxCare
+        res.status(200).json({
+            status: 'sent',
+            id_interno: external_id || sent.key.id
+        });
+    } catch (e) {
+        console.error("Error en envio LuxCare:", e.message);
+        res.status(500).json({ error: 'Error al enviar' });
     }
 });
 
