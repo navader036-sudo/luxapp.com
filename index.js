@@ -758,10 +758,11 @@ app.get('/api/creds', validateAPI, async (req, res) => {
         apiKey: process.env.API_KEY,
         sendUrl: `${req.protocol}://${req.get('host')}/api/instance/send`,
         receiveUrl: `${req.protocol}://${req.get('host')}/api/messages/recent`,
-        luxCare: {
-            sendUrl: `${req.protocol}://${req.get('host')}/api/lux/send`,
-            secretKey: process.env.LUXCARE_API_KEY || 'lux_secret_123',
-            webhookUrl: process.env.LUXCARE_WEBHOOK_URL
+        luxApp: {
+            apiKey: process.env.API_KEY,
+            sendUrl: `${req.protocol}://${req.get('host')}/api/instance/send`,
+            queryUrl: `${req.protocol}://${req.get('host')}/api/messages/recent`,
+            instanceId: 'default_instance' // Opcional
         },
         aiConfig: {
             enabled: dbConfig.enabled,
