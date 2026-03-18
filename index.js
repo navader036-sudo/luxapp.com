@@ -26,6 +26,22 @@ const io = new Server(server, {
     }
 });
 
+// Enviar estado inicial inmediato cuando un cliente se conecta
+io.on('connection', (socket) => {
+    console.log(`[SOCKET] Cliente conectado: ${socket.id}`);
+
+    // Enviar estado de conexión actual
+    socket.emit('status', {
+        connected: !!sock?.user,
+        user: sock?.user?.id ? sock.user.id.split(':')[0] : null
+    });
+
+    // Si hay un QR disponible, enviarlo de inmediato
+    if (qrBase64) {
+        socket.emit('qr', qrBase64);
+    }
+});
+
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -185,14 +201,21 @@ async function connectToWhatsApp() {
     };
 
     const { state, saveCreds } = await useMultiFileAuthState('auth_luxapp');
-    const { version } = await fetchLatestBaileysVersion();
+
+    let waVersion;
+    try {
+        const { version } = await fetchLatestBaileysVersion();
+        waVersion = version;
+    } catch (e) {
+        waVersion = [2, 3000, 1015901307];
+    }
 
     sock = makeWASocket({
-        version,
+        version: waVersion,
         auth: state,
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
-        browser: ['Luxapp Engine', 'MacOS', '10.15.7']
+        browser: ['Luxapp Engine', 'Chrome', '121.0.0.0']
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -229,39 +252,45 @@ async function connectToWhatsApp() {
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
+
         if (qr) {
             qrBase64 = qr;
             io.emit('qr', qr);
         }
+
         if (connection === 'open') {
             qrBase64 = null;
-            io.emit('status', { connected: true, user: sock.user.id.split(':')[0] });
-            console.log('✅ Luxapp está conectado.');
-            // Intentar sincronizar nombres después de un momento para que el store cargue
+            const userNum = sock.user.id.split(':')[0];
+            io.emit('status', { connected: true, user: userNum });
+            io.emit('qr', null); // Limpiar QR en el cliente
+            console.log(`✅ Luxapp está conectado: ${userNum}`);
             setTimeout(() => syncContactsWithDB(), 5000);
         }
+
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const reason = lastDisconnect?.error?.message;
             console.log(`❌ Conexión cerrada. Código: ${statusCode} | Motivo: ${reason}`);
 
-            // Si el código es 401 (desautorizado) o loggedOut, la sesión murió
-            const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401;
+            // Solo borrar sesión si es un logout explícito o desautorización definitiva
+            const isLoggedOut = statusCode === DisconnectReason.loggedOut;
             const shouldReconnect = !isLoggedOut;
 
             io.emit('status', { connected: false });
+            qrBase64 = null; // Reiniciar QR temporalmente
 
             if (shouldReconnect) {
-                console.log('🔄 Reconectando en 5 segundos...');
-                setTimeout(() => connectToWhatsApp(), statusCode === 440 ? 10000 : 5000);
+                const waitTime = statusCode === 440 ? 10000 : 5000;
+                console.log(`🔄 Reconectando automáticamente en ${waitTime / 1000}s...`);
+                setTimeout(() => connectToWhatsApp(), waitTime);
             } else {
-                console.log('🗑️ Sesión invalidada o teléfono desconectado (Código ' + statusCode + '). Borrando auth_luxapp y generando nuevo QR...');
+                console.log('🗑️ Sesión cerrada por el usuario o borrada. Regenerando QR en 3 segundos...');
                 try {
                     fs.rmSync('./auth_luxapp', { recursive: true, force: true });
                 } catch (err) {
-                    console.error('Error al borrar carpeta auth_luxapp:', err.message);
+                    console.error('Error al borrar auth_luxapp:', err.message);
                 }
-                setTimeout(() => connectToWhatsApp(), 2000);
+                setTimeout(() => connectToWhatsApp(), 3000);
             }
         }
     });
