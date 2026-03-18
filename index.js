@@ -299,14 +299,18 @@ async function connectToWhatsApp() {
             else if (msg.message.videoMessage?.caption) text = msg.message.videoMessage.caption;
             else text = "Multimedia/Otro";
 
+            const timestamp = typeof msg.messageTimestamp === 'object' && msg.messageTimestamp !== null
+                ? msg.messageTimestamp.low
+                : msg.messageTimestamp;
+
             // Guardar en DB
-            await saveMessage(jid, pushName, fromMe, text, msg.key.id, msg.messageTimestamp);
+            await saveMessage(jid, pushName, fromMe, text, msg.key.id, timestamp);
 
             // Notificar al Helpdesk
             io.emit('new_message', {
                 jid,
                 name: pushName,
-                message: { text, fromMe, timestamp: msg.messageTimestamp }
+                message: { text, fromMe, timestamp: timestamp }
             });
 
             // Notificar a LuxCare (Webhook)
