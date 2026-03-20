@@ -113,6 +113,14 @@ async function initDB() {
         )`);
         console.log('✅ Tabla citas actualizada.');
 
+        // TABLA DE RECURSOS (Mesas, Sedes, etc.)
+        await pool.query(`CREATE TABLE IF NOT EXISTS recursos (
+            id SERIAL PRIMARY KEY, 
+            nombre TEXT UNIQUE NOT NULL, 
+            tipo TEXT DEFAULT 'sede' -- 'sede', 'mesa', etc.
+        )`);
+        console.log('✅ Tabla recursos lista.');
+
         console.log('✅ Base de datos inicializada completamente.');
 
         // Cargar config inicial
@@ -683,6 +691,10 @@ async function handleAIResponse(jid, userText, name) {
             content: m.text
         }));
 
+        // OBTENER RECURSOS DINÁMICAMENTE PARA LA IA
+        const resourcesRes = await pool.query('SELECT nombre FROM recursos');
+        const availableResources = resourcesRes.rows.map(r => r.nombre).join(', ') || 'General';
+
         const tools = [{
             type: "function",
             function: {
@@ -694,7 +706,7 @@ async function handleAIResponse(jid, userText, name) {
                         fecha: { type: "string", description: "Fecha en formato YYYY-MM-DD" },
                         hora: { type: "string", description: "Hora en formato HH:mm" },
                         duracion: { type: "integer", description: "Duración de la cita en minutos (ej: 30, 60, 120)" },
-                        recurso: { type: "string", description: "Nombre de la mesa, sede o sucursal (ej: Mesa 1, Sede Norte)" },
+                        recurso: { type: "string", description: "Nombre de la mesa, sede o sucursal. Elige de esta lista solamente: " + availableResources },
                         motivo: { type: "string", description: "Breve descripción del motivo de la cita" }
                     },
                     required: ["fecha", "hora", "recurso"]
@@ -705,7 +717,8 @@ async function handleAIResponse(jid, userText, name) {
         const personalizedPrompt = `${aiConfig.prompt} \n\nInstrucciones de citas: 
         1. Pregunta fecha, hora y en qué mesa/sede desea agendar.
         2. Si no especifica duración, asume 60 minutos.
-        3. Sedes disponibles: Sede Norte, Sede Sur, Mesa 1, Mesa 2. (Personaliza esto según tu negocio).
+        3. OPCIONES DISPONIBLES: ${availableResources}.
+        4. Si el cliente pide algo que NO está en la lista, infórmale qué opciones tienes.
         Hoy es ${new Date().toLocaleDateString('es-VE')}. Hablas con ${name}.`;
         const aiResponse = await getProviderResponse(aiConfig.provider, userText, personalizedPrompt, history, tools);
 
@@ -1003,6 +1016,36 @@ app.delete('/api/appointments/:id', validateAPI, async (req, res) => {
         const { id } = req.params;
         // Opcional: Podrías buscar el google_event_id y borrarlo de Google también
         await pool.query('DELETE FROM citas WHERE id = $1', [id]);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- ENDPOINTS DE GESTIÓN DE RECURSOS ---
+app.get('/api/resources', validateAPI, async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM recursos ORDER BY nombre ASC');
+        res.json(result.rows);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/resources', validateAPI, async (req, res) => {
+    try {
+        const { nombre, tipo } = req.body;
+        await pool.query('INSERT INTO recursos (nombre, tipo) VALUES ($1, $2) ON CONFLICT (nombre) DO NOTHING', [nombre, tipo || 'sede']);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.delete('/api/resources/:id', validateAPI, async (req, res) => {
+    try {
+        const { id } = req.params;
+        await pool.query('DELETE FROM recursos WHERE id = $1', [id]);
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
