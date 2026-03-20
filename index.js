@@ -99,17 +99,19 @@ async function initDB() {
         await pool.query(`CREATE TABLE IF NOT EXISTS ai_keys (provider TEXT PRIMARY KEY, api_key TEXT, base_url TEXT)`);
         console.log('✅ Tabla ai_keys lista (Bóveda de llaves).');
 
-        // TABLA DE CITAS
+        // TABLA DE CITAS (CON SOPORTE PARA RECURSOS Y DURACIÓN)
         await pool.query(`CREATE TABLE IF NOT EXISTS citas (
             id SERIAL PRIMARY KEY, 
             jid TEXT NOT NULL, 
             nombre_cliente TEXT, 
             fecha_inicio TIMESTAMP NOT NULL, 
             fecha_fin TIMESTAMP NOT NULL, 
+            duracion_minutos INTEGER DEFAULT 60,
+            recurso TEXT DEFAULT 'General', 
             google_event_id TEXT, 
             estado TEXT DEFAULT 'confirmada'
         )`);
-        console.log('✅ Tabla citas lista.');
+        console.log('✅ Tabla citas actualizada.');
 
         console.log('✅ Base de datos inicializada completamente.');
 
@@ -691,14 +693,20 @@ async function handleAIResponse(jid, userText, name) {
                     properties: {
                         fecha: { type: "string", description: "Fecha en formato YYYY-MM-DD" },
                         hora: { type: "string", description: "Hora en formato HH:mm" },
+                        duracion: { type: "integer", description: "Duración de la cita en minutos (ej: 30, 60, 120)" },
+                        recurso: { type: "string", description: "Nombre de la mesa, sede o sucursal (ej: Mesa 1, Sede Norte)" },
                         motivo: { type: "string", description: "Breve descripción del motivo de la cita" }
                     },
-                    required: ["fecha", "hora"]
+                    required: ["fecha", "hora", "recurso"]
                 }
             }
         }];
 
-        const personalizedPrompt = `${aiConfig.prompt} \n\nInstrucciones de citas: Si el cliente quiere agendar, pregunta la fecha y hora si no lo ha dicho. Hoy es ${new Date().toLocaleDateString('es-VE')}. Hablas con ${name}.`;
+        const personalizedPrompt = `${aiConfig.prompt} \n\nInstrucciones de citas: 
+        1. Pregunta fecha, hora y en qué mesa/sede desea agendar.
+        2. Si no especifica duración, asume 60 minutos.
+        3. Sedes disponibles: Sede Norte, Sede Sur, Mesa 1, Mesa 2. (Personaliza esto según tu negocio).
+        Hoy es ${new Date().toLocaleDateString('es-VE')}. Hablas con ${name}.`;
         const aiResponse = await getProviderResponse(aiConfig.provider, userText, personalizedPrompt, history, tools);
 
         let finalAiText = aiResponse.content || "";
@@ -707,21 +715,38 @@ async function handleAIResponse(jid, userText, name) {
             for (const toolCall of aiResponse.tool_calls) {
                 if (toolCall.function.name === 'agendar_cita') {
                     const args = JSON.parse(toolCall.function.arguments);
-                    console.log(`[AI-TOOL] Agendando cita: ${args.fecha} ${args.hora}`);
+                    const duracionStr = args.duracion || 60;
+                    const recurso = args.recurso || 'General';
+
+                    console.log(`[AI-TOOL] Agendando cita: ${args.fecha} ${args.hora} | Duración: ${duracionStr}m | Recurso: ${recurso}`);
 
                     try {
                         const start = new Date(`${args.fecha} ${args.hora}`);
-                        const end = new Date(start.getTime() + 60 * 60 * 1000); // 1 hora
+                        const end = new Date(start.getTime() + duracionStr * 60 * 1000);
 
-                        // Agenda en Google
-                        const gEvent = await addCalendarEvent(`Cita: ${name}`, start.toISOString(), end.toISOString(), args.motivo || 'Cita desde WhatsApp');
+                        // VERIFICACIÓN DE DISPONIBILIDAD (MISMO RECURSO)
+                        const conflictRes = await pool.query(`
+                            SELECT id FROM citas 
+                            WHERE recurso = $1 
+                            AND estado = 'confirmada'
+                            AND (($2 >= fecha_inicio AND $2 < fecha_fin) 
+                                 OR ($3 > fecha_inicio AND $3 <= fecha_fin)
+                                 OR (fecha_inicio >= $2 AND fecha_inicio < $3))
+                        `, [recurso, start.toISOString(), end.toISOString()]);
 
-                        // Guarda en DB
-                        await pool.query(`INSERT INTO citas (jid, nombre_cliente, fecha_inicio, fecha_fin, google_event_id, estado)
-                                        VALUES ($1, $2, $3, $4, $5, $6)`,
-                            [jid, name, start.toISOString(), end.toISOString(), gEvent.id, 'confirmada']);
+                        if (conflictRes.rows.length > 0) {
+                            finalAiText = `Lo siento, el recurso "${recurso}" ya está reservado en ese horario. Por favor elige otra hora o una mesa/sede diferente.`;
+                        } else {
+                            // Agenda en Google
+                            const gEvent = await addCalendarEvent(`Cita: ${name} (${recurso})`, start.toISOString(), end.toISOString(), args.motivo || 'Cita desde WhatsApp');
 
-                        finalAiText = `✅ ¡Listo! Te he agendado una cita para el ${args.fecha} a las ${args.hora}. Te llegará un recordatorio pronto.`;
+                            // Guarda en DB
+                            await pool.query(`INSERT INTO citas (jid, nombre_cliente, fecha_inicio, fecha_fin, duracion_minutos, recurso, google_event_id, estado)
+                                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                                [jid, name, start.toISOString(), end.toISOString(), duracionStr, recurso, gEvent.id, 'confirmada']);
+
+                            finalAiText = `✅ ¡Listo! Te he agendado una cita en **${recurso}** para el ${args.fecha} a las ${args.hora} (Duración: ${duracionStr} min).`;
+                        }
                     } catch (calError) {
                         console.error("[CALENDAR-ERROR]", calError.message);
                         finalAiText = `Lo siento, hubo un error al agendar en el calendario, pero intentaré registrarlo internamente.`;
