@@ -9,6 +9,8 @@ const http = require('http');
 const { Server } = require('socket.io');
 const pino = require('pino');
 const fs = require('fs');
+const path = require('path');
+const { addCalendarEvent, listUpcomingEvents } = require('./calendar.js');
 const { OpenAI } = require('openai');
 const Anthropic = require('@anthropic-ai/sdk');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
@@ -96,6 +98,18 @@ async function initDB() {
         console.log('✅ Tabla wh_messages lista.');
         await pool.query(`CREATE TABLE IF NOT EXISTS ai_keys (provider TEXT PRIMARY KEY, api_key TEXT, base_url TEXT)`);
         console.log('✅ Tabla ai_keys lista (Bóveda de llaves).');
+
+        // TABLA DE CITAS
+        await pool.query(`CREATE TABLE IF NOT EXISTS citas (
+            id SERIAL PRIMARY KEY, 
+            jid TEXT NOT NULL, 
+            nombre_cliente TEXT, 
+            fecha_inicio TIMESTAMP NOT NULL, 
+            fecha_fin TIMESTAMP NOT NULL, 
+            google_event_id TEXT, 
+            estado TEXT DEFAULT 'confirmada'
+        )`);
+        console.log('✅ Tabla citas lista.');
 
         console.log('✅ Base de datos inicializada completamente.');
 
@@ -537,7 +551,7 @@ async function saveMessage(jid, name, fromMe, text, msgId, timestamp) {
     }
 }
 
-async function getProviderResponse(provider, userText, systemPrompt, history = []) {
+async function getProviderResponse(provider, userText, systemPrompt, history = [], tools = null) {
     const selectedModel = aiConfig.model || (provider === 'openai' ? 'gpt-3.5-turbo' :
         provider === 'anthropic' ? 'claude-3-haiku-20240307' :
             provider === 'gemini' ? 'gemini-1.5-flash' :
@@ -551,7 +565,7 @@ async function getProviderResponse(provider, userText, systemPrompt, history = [
 
     const openAiProviders = ['openai', 'openrouter', 'custom', 'groq', 'mistral', 'deepseek', 'perplexity', 'ollama', 'xai'];
 
-    const strictRules = `\n\nREGLAS ESTRICTAS OBLIGATORIAS: \n1.Eres un asistente respondiendo por WhatsApp.Tus respuestas DEBEN ser breves, directas y concisas.\n2.NO envíes largos bloques de texto ni múltiples opciones a menos que se te pida explícitamente.\n3.NO inventes conversaciones simuladas, NO uses timestamps(ej: [11: 53 a.m.]), y NUNCA escribas respuestas en nombre del cliente.\n4.Limítate a responder exactamente a lo que se te pregunta con naturalidad.\n5.RESPONDE EXACTAMENTE EN EL MISMO IDIOMA en el que te escribe el cliente(Por defecto Español).NO mezcles ni cambies de idioma a menos que el cliente te hable en otro idioma.`;
+    const strictRules = `\n\nREGLAS ESTRICTAS OBLIGATORIAS: \n1.Eres un asistente respondiendo por WhatsApp.Tus respuestas DEBEN ser breves, directas y concisas.\n2.NO envíes largos bloques de texto ni múltiples opciones a menos que se te pida explícitamente.\n3.NO inventes conversaciones simuladas, NO uses timestamps(ej: [11: 53 a.m.]), y NUNCA escribas respuestas en nombre del cliente.\n4.Limítate a responder exactamente a lo que se te pregunta con naturalidad.\n5.RESPONDE EXACTAMENTE EN EL MISMO IDIOMA en el que te escribe el cliente(Por defecto Español).NO mezcles ni cambies de idioma a menos que el cliente te hable en otro idioma.\n6.HOY es ${new Date().toLocaleString('es-VE', { timeZone: 'America/Caracas' })}. (No menciones esto a menos que sea necesario para agendar).`;
 
     const finalSystemPrompt = systemPrompt + strictRules;
 
@@ -562,58 +576,75 @@ async function getProviderResponse(provider, userText, systemPrompt, history = [
     ];
 
     let finalModel = selectedModel;
-    // Limpieza de prefijos si no es OpenRouter
     if (provider !== 'openrouter' && finalModel.includes('/')) {
         finalModel = finalModel.split('/').pop();
     }
 
     if (openAiProviders.includes(provider) && openai) {
-        const chatCompletion = await openai.chat.completions.create({
+        const payload = {
             messages: messages,
             model: finalModel,
             temperature: 0.5,
-            max_tokens: 800, // Respuestas más cortas para evitar locuras
-        });
-        return chatCompletion.choices[0].message.content;
-    } else if (provider === 'anthropic' && anthropic) {
-        // Anthropic usa un formato diferente para el sistema
-        const msg = await anthropic.messages.create({
-            model: finalModel,
-            max_tokens: 2048,
-            system: systemPrompt,
-            messages: [
-                ...history,
-                { role: "user", content: userText }
-            ],
-        });
-        return msg.content[0].text;
+            max_tokens: 800,
+        };
+        if (tools) payload.tools = tools;
+
+        const chatCompletion = await openai.chat.completions.create(payload);
+        const response = chatCompletion.choices[0].message;
+
+        if (response.tool_calls) {
+            return { tool_calls: response.tool_calls, content: response.content };
+        }
+        return { content: response.content };
     } else if (provider === 'gemini' && gemini) {
         try {
-            // Limpiar nombre del modelo para Google (debe ser minúsculas y sin prefijos)
             let geminiModel = finalModel.toLowerCase().trim();
             if (geminiModel.includes('/')) geminiModel = geminiModel.split('/').pop();
 
-            const model = gemini.getGenerativeModel({
+            const modelConfig = {
                 model: geminiModel,
                 systemInstruction: systemPrompt,
                 generationConfig: {
                     maxOutputTokens: 2048,
                     temperature: 0.7,
                 }
+            };
+            if (tools) {
+                // Gemini usa un formato un poco diferente para las herramientas
+                modelConfig.tools = [{ functionDeclarations: tools.map(t => t.function) }];
+            }
+
+            const model = gemini.getGenerativeModel(modelConfig);
+
+            // Para Gemini, usamos chat history amigable
+            const chat = model.startChat({
+                history: history.map(h => ({
+                    role: h.role === 'assistant' ? 'model' : 'user',
+                    parts: [{ text: h.content }]
+                }))
             });
-            const promptFull = history.map(m => `${m.role === 'user' ? 'Cliente' : 'Asistente'}: ${m.content} `).join('\n') + `\nCliente: ${userText} \nAsistente: `;
-            const result = await model.generateContent(promptFull);
+
+            const result = await chat.sendMessage(userText);
             const response = await result.response;
-            return response.text();
+            const functionCalls = response.functionCalls();
+
+            if (functionCalls) {
+                return {
+                    tool_calls: functionCalls.map((fc, i) => ({
+                        id: 'gemini_' + i + '_' + Date.now(),
+                        function: { name: fc.name, arguments: JSON.stringify(fc.args) }
+                    })),
+                    content: response.text()
+                };
+            }
+
+            return { content: response.text() };
         } catch (geminiError) {
             console.error("Error detallado de Gemini:", geminiError);
-            if (geminiError.message.includes("404") || geminiError.message.includes("not found")) {
-                throw new Error(`⚠️ BLOQUEO REGIONAL: El API directo de Google Gemini no está disponible en tu región(Venezuela).Por favor, usa este mismo modelo seleccionando el proveedor 'OpenRouter' para saltar el bloqueo.`);
-            }
             throw geminiError;
         }
     }
-    throw new Error('Proveedor no soportado, mal configurado o sin API Key');
+    throw new Error('Proveedor no soportado o sin API Key');
 }
 
 async function syncContactsWithDB() {
@@ -640,40 +671,74 @@ async function syncContactsWithDB() {
 }
 
 async function handleAIResponse(jid, userText, name) {
-    if (!aiConfig.api_key) {
-        console.log("[AI] Error: No hay API Key configurada.");
-        return;
-    }
-    if (!aiConfig.provider) aiConfig.provider = 'openai';
+    if (!aiConfig.api_key) return;
     initProviderClient(aiConfig.provider, aiConfig.api_key, aiConfig.base_url);
 
     try {
-        // Obtener historial reciente para contexto
         const historyRes = await pool.query('SELECT from_me, text FROM wh_messages WHERE jid = $1 ORDER BY timestamp DESC LIMIT 6', [jid]);
         const history = historyRes.rows.reverse().map(m => ({
             role: m.from_me ? 'assistant' : 'user',
             content: m.text
         }));
 
-        console.log(`[AI] Solicitando respuesta de ${aiConfig.provider} (${aiConfig.model || 'default'}) para ${jid}...`);
-        const personalizedPrompt = `${aiConfig.prompt} \n\nEstás hablando con: ${name} `;
-        const aiText = await getProviderResponse(aiConfig.provider, userText, personalizedPrompt, history);
+        const tools = [{
+            type: "function",
+            function: {
+                name: "agendar_cita",
+                description: "Agenda una cita en el calendario una vez el usuario confirma fecha, hora y motivo.",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        fecha: { type: "string", description: "Fecha en formato YYYY-MM-DD" },
+                        hora: { type: "string", description: "Hora en formato HH:mm" },
+                        motivo: { type: "string", description: "Breve descripción del motivo de la cita" }
+                    },
+                    required: ["fecha", "hora"]
+                }
+            }
+        }];
 
-        console.log(`[AI] Respuesta recibida: "${aiText.substring(0, 50)}..."`);
-        await sock.sendMessage(jid, { text: aiText });
+        const personalizedPrompt = `${aiConfig.prompt} \n\nInstrucciones de citas: Si el cliente quiere agendar, pregunta la fecha y hora si no lo ha dicho. Hoy es ${new Date().toLocaleDateString('es-VE')}. Hablas con ${name}.`;
+        const aiResponse = await getProviderResponse(aiConfig.provider, userText, personalizedPrompt, history, tools);
 
-        const msgId = 'ai_' + Date.now();
-        const ts = Math.floor(Date.now() / 1000);
-        await saveMessage(jid, name, true, aiText, msgId, ts);
+        let finalAiText = aiResponse.content || "";
 
-        io.emit('new_message', {
-            jid,
-            name,
-            message: { text: aiText, fromMe: true, timestamp: ts }
-        });
+        if (aiResponse.tool_calls) {
+            for (const toolCall of aiResponse.tool_calls) {
+                if (toolCall.function.name === 'agendar_cita') {
+                    const args = JSON.parse(toolCall.function.arguments);
+                    console.log(`[AI-TOOL] Agendando cita: ${args.fecha} ${args.hora}`);
+
+                    try {
+                        const start = new Date(`${args.fecha} ${args.hora}`);
+                        const end = new Date(start.getTime() + 60 * 60 * 1000); // 1 hora
+
+                        // Agenda en Google
+                        const gEvent = await addCalendarEvent(`Cita: ${name}`, start.toISOString(), end.toISOString(), args.motivo || 'Cita desde WhatsApp');
+
+                        // Guarda en DB
+                        await pool.query(`INSERT INTO citas (jid, nombre_cliente, fecha_inicio, fecha_fin, google_event_id, estado)
+                                        VALUES ($1, $2, $3, $4, $5, $6)`,
+                            [jid, name, start.toISOString(), end.toISOString(), gEvent.id, 'confirmada']);
+
+                        finalAiText = `✅ ¡Listo! Te he agendado una cita para el ${args.fecha} a las ${args.hora}. Te llegará un recordatorio pronto.`;
+                    } catch (calError) {
+                        console.error("[CALENDAR-ERROR]", calError.message);
+                        finalAiText = `Lo siento, hubo un error al agendar en el calendario, pero intentaré registrarlo internamente.`;
+                    }
+                }
+            }
+        }
+
+        if (finalAiText) {
+            await sock.sendMessage(jid, { text: finalAiText });
+            const ts = Math.floor(Date.now() / 1000);
+            await saveMessage(jid, name, true, finalAiText, 'ai_' + Date.now(), ts);
+            io.emit('new_message', { jid, name, message: { text: finalAiText, fromMe: true, timestamp: ts } });
+        }
 
     } catch (e) {
-        console.error("❌ [AI] Error detallado:", e.message);
+        console.error("❌ [AI] Error:", e.message);
     }
 }
 
@@ -893,6 +958,27 @@ app.post('/api/instance/send', validateAPI, async (req, res) => {
         });
 
         res.json({ status: "sent", jid });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- ENDPOINTS DE CITAS ---
+app.get('/api/appointments', validateAPI, async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM citas ORDER BY fecha_inicio DESC');
+        res.json(result.rows);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.delete('/api/appointments/:id', validateAPI, async (req, res) => {
+    try {
+        const { id } = req.params;
+        // Opcional: Podrías buscar el google_event_id y borrarlo de Google también
+        await pool.query('DELETE FROM citas WHERE id = $1', [id]);
+        res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
